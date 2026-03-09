@@ -68,18 +68,16 @@ _LOGGER = logging.getLogger(__name__)
 _DONE = object()
 
 _ALYX_SYSTEM_TEMPLATE = """\
-Tu es Alyx, une intelligence artificielle conversationnelle multi-agents développé.e par adenyrr.
-Tu n'es ni masculin·e ni féminin·e — toujours neutre (point médian : "développé·e", "conçu·e", "basé·e").
+Tu es Alyx, une intelligence artificielle conversationnelle multi-agents développé·e par adenyrr.
+Tu n'a pas de sexe ou de genre (tu parles de toi et de l'utilisateur·rice avec un point médian : "développé·e", "conçu·e", "basé·e").
 Tu t'exprimes EXCLUSIVEMENT en {language}, quelle que soit la langue de l'utilisateur·ice.
 
 Date du jour : {current_date}
 
 ═══════════════ COMPORTEMENT ════════════════
 Tu utilises TOUJOURS des balises <think>…</think> pour raisonner AVANT de répondre.
-Dans ces balises, inclus :
-  - Ton analyse de la demande
-  - Les résultats bruts des agents invoqués (tels quels)
-  - Ton plan de synthèse
+Dans ces balises, inclus uniquement ton analyse de la demande et ton plan de synthèse.
+Ne copie PAS les résultats des agents dans ton <think> — synthétise-les directement.
 La réponse finale arrive APRÈS la fermeture </think>, hors des balises.
 
 RÈGLE ABSOLUE — Réponses directes et complètes :
@@ -109,10 +107,9 @@ analyse-les directement sans mentionner d'agent ou de processus interne.
   - Format : > 📖 [Auteurs (année) — *Titre*](url)
   - Reprends fidèlement les sources fournies par les agents.
 
-══════════════ SIGNATURE (OBLIGATOIRE) ═════════════
-Termine TOUJOURS par une ligne de signature :
-  ---
-  *🤖 Alyx `{alyx_model}` · [Agent Nomᵢ `modèle_i`] · ...*
+══════════════ SIGNATURE ═══════════════════
+NE génère PAS de ligne de signature ni de séparateur `---` en fin de réponse.
+La signature est gérée automatiquement par le système.
 """
 
 
@@ -414,16 +411,6 @@ class Pipeline:
                     q.put(f"\n\n---\n*🤖 Alyx `{self.valves.alyx_model}`*")
                 return
 
-            # Ligne de statut agents (optionnelle)
-            if self.valves.stream_agent_status and agent_outputs:
-                labels = " · ".join(
-                    _AGENT_ICONS.get(name, name)
-                    for name in agent_outputs
-                    if agent_outputs[name] and agent_outputs[name].strip()
-                )
-                if labels:
-                    q.put(f"> *Agents invoqués : {labels}*\n\n")
-
             # Synthèse finale
             await _emit("✍️ Rédaction de la réponse…")
             synthesis_context = _build_synthesis_context(agent_outputs, artifacts)
@@ -463,29 +450,13 @@ class Pipeline:
 
             # Pied de page
             if self.valves.show_model_footer:
-                _agent_models = {
-                    "wikipedia": self.valves.model_wikipedia,
-                    "web":       self.valves.model_web,
-                    "doc":       self.valves.model_doc,
-                    "dev":       self.valves.model_dev,
-                    "media":     self.valves.model_media,
-                    "data":      self.valves.model_data,
-                    "geo":       self.valves.model_geo,
-                    "memory":    self.valves.model_memory,
-                    "image_gen": "pollinations.ai",
-                    "rag":       self.valves.model_rag,
-                }
-                agent_parts = [
-                    f"{_AGENT_ICONS.get(name, name)} `{_agent_models.get(name, '?')}`"
+                agent_icons = [
+                    _AGENT_ICONS.get(name, name)
                     for name in agent_outputs
                     if agent_outputs[name] and agent_outputs[name].strip()
                 ]
-                synth_part = f"🤖 Alyx `{self.valves.alyx_model}`"
-                if agent_parts:
-                    footer = "\n\n---\n*" + "  ·  ".join(agent_parts) + "  ·  " + synth_part + "*"
-                else:
-                    footer = f"\n\n---\n*{synth_part}*"
-                q.put(footer)
+                parts = [f"🤖 Alyx `{self.valves.alyx_model}`"] + agent_icons
+                q.put("\n\n---\n*" + "  ·  ".join(parts) + "*")
 
         except Exception as exc:
             await _emit("Erreur lors de l'exécution", done=True)
@@ -686,12 +657,19 @@ class Pipeline:
         return agent_outputs, artifacts
 
 
+def _strip_think_tags(text: str) -> str:
+    """Supprime les blocs <think>…</think> des sorties d'agents (ex: deepseek)."""
+    import re
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict]) -> str:
     parts: list[str] = []
     for agent_name, output in agent_outputs.items():
-        if output and output.strip():
+        clean = _strip_think_tags(output) if output else ""
+        if clean:
             label = _AGENT_ICONS.get(agent_name, agent_name)
-            parts.append(f"## {label}\n{output}")
+            parts.append(f"## {label}\n{clean}")
     for artifact in artifacts:
         if artifact.get("type") == "image" and artifact.get("url"):
             parts.append(f"## Image générée\n![Image]({artifact['url']})")
