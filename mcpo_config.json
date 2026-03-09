@@ -109,8 +109,8 @@
     },
 
     "open-terminal": {
-      "type": "openapi",
-      "url": "http://open-terminal:8000/openapi.json",
+      "type": "streamable-http",
+      "url": "http://open-terminal:8000/",
       "headers": {
         "Authorization": "${OPEN_TERMINAL_API_KEY}"
     }
