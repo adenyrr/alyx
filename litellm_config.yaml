@@ -1,0 +1,141 @@
+# litellm_config.yaml
+# Configuration LiteLLM — proxy LLM unifié
+# Doc : https://docs.litellm.ai/docs/proxy/configs
+#
+# Provider actif : OpenRouter
+# Pour activer un autre provider, commentez la section OpenRouter
+# et décommentez le provider souhaité. Ajoutez la clé API correspondante
+# dans le compose.yaml (environment de litellm) et dans votre .env.
+
+model_list:
+
+  # ── OpenRouter (ACTIF) ────────────────────────────────────
+  # Agrège 300+ modèles via une seule clé API.
+  # Liste complète : https://openrouter.ai/models
+  # Format : openrouter/<provider>/<model-name>
+
+  - model_name: openrouter/gpt-oss
+    litellm_params:
+      model: openrouter/openai/gpt-oss-120b
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter/trinity
+    litellm_params:
+      model: openrouter/arcee-ai/trinity-large-preview:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter/kimi-k2.5
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter/qwen3.5-flash
+    litellm_params:
+      model: openrouter/qwen/qwen3.5-flash-02-23
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: pollinations/flux
+    litellm_params:
+      model: openai/klein-large
+      api_base: https://gen.pollinations.ai/v1
+      api_key: os.environ/POLLINATIONS_API_KEY
+
+  # ── Ollama — inférence locale ──────────────────────────────
+  # Nécessite d'ajouter un service "ollama" au compose.yaml.
+  # Aucune clé API requise.
+  #
+  # - model_name: ollama/llama3.3
+  #   litellm_params:
+  #     model: ollama/llama3.3
+  #     api_base: http://ollama:11434
+  #
+  # - model_name: ollama/qwen2.5-coder
+  #   litellm_params:
+  #     model: ollama/qwen2.5-coder
+  #     api_base: http://ollama:11434
+
+  # ── OpenAI — direct ───────────────────────────────────────
+  # Variable requise : OPENAI_API_KEY
+  #
+  # - model_name: gpt-4o
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_key: os.environ/OPENAI_API_KEY
+  #
+  # - model_name: gpt-4o-mini
+  #   litellm_params:
+  #     model: openai/gpt-4o-mini
+  #     api_key: os.environ/OPENAI_API_KEY
+
+  # ── Anthropic — direct ────────────────────────────────────
+  # Variable requise : ANTHROPIC_API_KEY
+  #
+  # - model_name: claude-sonnet-4-5
+  #   litellm_params:
+  #     model: anthropic/claude-sonnet-4-5-20251001
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── Mistral — direct ──────────────────────────────────────
+  # Variable requise : MISTRAL_API_KEY
+  #
+  # - model_name: mistral-large
+  #   litellm_params:
+  #     model: mistral/mistral-large-latest
+  #     api_key: os.environ/MISTRAL_API_KEY
+
+  # ── Google Gemini — direct ────────────────────────────────
+  # Variable requise : GEMINI_API_KEY
+  #
+  # - model_name: gemini-2.0-flash
+  #   litellm_params:
+  #     model: gemini/gemini-2.0-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+
+  # ── Groq — inférence rapide ───────────────────────────────
+  # Variable requise : GROQ_API_KEY
+  #
+  # - model_name: groq/llama-3.3-70b
+  #   litellm_params:
+  #     model: groq/llama-3.3-70b-versatile
+  #     api_key: os.environ/GROQ_API_KEY
+
+  # ── Azure OpenAI ──────────────────────────────────────────
+  # Variables requises : AZURE_API_KEY, AZURE_API_BASE, AZURE_API_VERSION
+  #
+  # - model_name: azure-gpt4o
+  #   litellm_params:
+  #     model: azure/gpt-4o
+  #     api_key: os.environ/AZURE_API_KEY
+  #     api_base: os.environ/AZURE_API_BASE
+  #     api_version: os.environ/AZURE_API_VERSION
+
+litellm_settings:
+  success_callback: []          # ex. ["langfuse", "prometheus"]
+  failure_callback: []
+  request_timeout: 600          # secondes
+  num_retries: 3
+  context_window_fallbacks:
+    - openrouter/gpt-oss: [openrouter/gpt-oss-120b]
+
+  # Cache via Redis DB 1 (séparé d'OpenWebUI qui utilise DB 0)
+  cache: true
+  cache_params:
+    type: redis
+    url: "redis://redis:6379/1"
+    ttl: 300                    # secondes
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+
+  # Quotas & rate-limiting (utile en entreprise / université)
+  # max_budget: 100.0           # USD/mois global
+  # budget_duration: "1mo"
+
+  store_model_in_db: true
+  store_prompts_in_spend_logs: false

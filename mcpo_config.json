@@ -1,0 +1,117 @@
+{
+  "mcpServers": {
+
+    "duckdb": {
+      "_comment": "Base de données OLAP ultra-rapide. Remplace sqlite (archivé avr. 2025). Analyse de fichiers CSV/Parquet, suivi longitudinal, données de cohorte.",
+      "command": "uvx",
+      "args": ["mcp-server-duckdb", "--db-path", "/data/duckdb/research_analytics.db"]
+    },
+
+    "git": {
+      "_comment": "Opérations Git (diff, log, blame, etc.). Package PyPI officiel Anthropic.",
+      "command": "uvx",
+      "args": ["mcp-server-git"]
+    },
+
+    "memory": {
+      "_comment": "MULTI-USER",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "/data/memory/knowledge_graph.json"
+      }
+    },
+
+    "sequential-thinking": {
+      "_comment": "Décomposition de problèmes complexes en étapes. Améliore les raisonnements cliniques, diagnostics différentiels, plans de recherche.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+
+    "wikipedia": {
+      "_comment": "Recherche Wikipedia multi-langue avec caching.",
+      "command": "uvx",
+        "args": ["wikipedia-mcp", "--language", "fr", "--enable-cache"]
+    },
+
+    "youtube-transcript": {
+      "_comment": "Transcription de vidéos YouTube avec sélection de langue. Cours magistraux, conférences, démonstrations techniques.",
+      "command": "uvx",
+      "args": ["mcp-youtube-transcript"]
+    },
+
+    "paper-search": {
+      "_comment": "Recherche académique unifiée — 14 plateformes : arXiv, PubMed, Sci-Hub, Google Scholar, Semantic Scholar, bioRxiv, medRxiv, Crossref, Web of Science, ScienceDirect, Springer, Wiley, Scopus, IACR. PubMed/arXiv/Sci-Hub/Crossref/Google Scholar fonctionnent sans clé API. WoS/ScienceDirect/Springer/Wiley/Scopus nécessitent des clés optionnelles.",
+      "command": "npx",
+      "args": ["-y", "paper-search-mcp-nodejs"],
+      "env": {
+        "PUBMED_API_KEY": "${PUBMED_API_KEY}",
+        "SEMANTIC_SCHOLAR_API_KEY": "${SEMANTIC_SCHOLAR_API_KEY}",
+        "WOS_API_KEY": "${WOS_API_KEY}",
+        "WOS_API_VERSION": "${WOS_API_VERSION}"
+      }
+    },
+
+    "pandoc": {
+      "_comment": "Conversion de documents : Markdown ↔ DOCX ↔ LaTeX ↔ HTML ↔ EPUB. Indispensable pour la rédaction académique.",
+      "command": "uvx",
+      "args": ["mcp-pandoc"]
+    },
+
+    "markitdown": {
+      "_comment": "Convertit PDF, Word, Excel, PowerPoint, HTML, images, audio, CSV, JSON, ZIP en Markdown. Microsoft, 88.7K stars.",
+      "command": "uvx",
+      "args": ["markitdown-mcp"]
+    },
+
+    "yahoo-finance": {
+      "command": "uvx",
+      "args": ["mcp-yahoo-finance"]
+    },
+
+    "fetch-web": {
+      "_comment": "Récupération et indexation web (fetch web).",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+
+    "playwright": {
+      "_comment": "Automatisation de navigateurs avec Playwright (Microsoft).",
+      "command": "uvx",
+      "args": ["mcp-playwright"]
+    },
+
+    "duckduckgo": {
+      "_comment": "Recherche web via DuckDuckGo (anonyme).",
+      "command": "uvx",
+      "args": ["duckduckgo-mcp-server"],
+      "env": {
+        "DDG_SAFE_SEARCH": "OFF",
+        "DDG_REGION": "be-fr"
+  }
+    },
+
+    "openmeteo": {
+      "command": "npx",
+      "args": ["-y", "-p", "open-meteo-mcp-server", "open-meteo-mcp-server"]
+    },
+
+    "osm-mcp-server": {
+      "_comment": "Accès aux données OpenStreetMap via un MCP serveur OSM.",
+      "command": "uvx",
+      "args": ["osm-mcp-server"]
+    },
+
+    "context7": {
+      "_comment": "Client Context7 via npx — nécessite clé API dans l'environnement.",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp", "--api-key", "${CONTEXT7_API_KEY}"]
+    },
+
+    "calculator": {
+      "_comment": "Évaluation d'expressions mathématiques (bibliothèque math Python complète).",
+      "command": "uvx",
+      "args": ["mcp-server-calculator"]
+    }
+  }
+}

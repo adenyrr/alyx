@@ -1,0 +1,374 @@
+name: llm-openwebui
+
+services:
+
+  # ──────────────────────────────────────────────
+  # FRONTEND
+  # ──────────────────────────────────────────────
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3721:8080"
+    volumes:
+      - open-webui:/app/backend/data
+      - mcp_uploads:/app/backend/data/uploads
+    environment:
+      # Database
+      DATABASE_URL: "postgresql://${PG_USER:-openwebui}:${PG_PASS}@postgres:5432/openwebui"
+      DATABASE_POOL_SIZE: "15"
+      DATABASE_POOL_MAX_OVERFLOW: "20"
+      DATABASE_ENABLE_SESSION_SHARING: "true"
+      # Vector DB
+      VECTOR_DB: "qdrant"
+      QDRANT_URI: "http://qdrant:6333"
+      ENABLE_QDRANT_MULTITENANCY_MODE: "true"
+      QDRANT_API_KEY: "${QDRANT_API_KEY}"
+      # Cache — Redis DB 0 réservé OpenWebUI
+      REDIS_URL: "redis://redis:6379/0"
+      ENABLE_BASE_MODELS_CACHE: "true"
+      MODELS_CACHE_TTL: "300"
+      ENABLE_QUERIES_CACHE: "true"
+      # Performance
+      THREAD_POOL_SIZE: "2000"
+      ENABLE_REALTIME_CHAT_SAVE: "false"
+      CHAT_RESPONSE_STREAM_DELTA_CHUNK_SIZE: "7"
+      # RAG
+      RAG_SYSTEM_CONTEXT: "true"
+      CHUNK_MIN_SIZE_TARGET: "1000"
+      TIKA_SERVER_URL: "http://tika:9998"
+      # Features
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY}"
+      ENABLE_IMAGE_GENERATION: "false"
+      ENABLE_CODE_INTERPRETER: "true"
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "true"
+      ENABLE_TITLE_GENERATION: "true"
+      ENABLE_TAGS_GENERATION: "true"
+      # MCPO
+      ENABLE_MCP_SERVERS: "true"
+      MCP_SERVER_BASE_URL: "http://mcpo:8000"
+      # LiteLLM + Pipelines (Alyx) — multi-source
+      OPENAI_API_BASE_URLS: "http://litellm:4000/v1;http://pipelines:9099"
+      OPENAI_API_KEYS: "${LITELLM_MASTER_KEY};${PIPELINES_API_KEY}"
+      #SSO
+      ENABLE_OAUTH_SIGNUP: ${ENABLE_OAUTH_SIGNUP}
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: ${OAUTH_MERGE_ACCOUNTS_BY_EMAIL}
+      OAUTH_PROVIDER_NAME: ${OAUTH_PROVIDER_NAME}
+      OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL}
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET}
+      OAUTH_SCOPES: ${OAUTH_SCOPES}
+      OPENID_REDIRECT_URI: ${OPENID_REDIRECT_URI}
+      ENABLE_LOGIN_FORM: ${ENABLE_LOGIN_FORM}
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+      pipelines:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      tika:
+        condition: service_started
+      playwright:
+        condition: service_started
+    restart: always
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # PIPELINES — LangGraph multi-agent (Alyx)
+  # ──────────────────────────────────────────────
+
+  pipelines:
+    image: ghcr.io/open-webui/pipelines:main
+    container_name: pipelines
+    # Port interne uniquement — OpenWebUI s'y connecte via le réseau Docker
+    # ports:
+    #   - "9099:9099"
+    volumes:
+      - ./sub_agents:/app/pipelines
+      - ./skills:/app/pipelines/skills:ro
+    environment:
+      PIPELINES_REQUIREMENTS_PATH: "/app/pipelines/requirements.txt"
+      PYTHONPATH: "/app/pipelines"
+      PIPELINES_API_KEY: "${PIPELINES_API_KEY}"
+      # LiteLLM proxy interne
+      LITELLM_URL: "http://litellm:4000/v1"
+      LITELLM_API_KEY: "${LITELLM_MASTER_KEY}"
+      # MCP proxy interne
+      MCPO_URL: "http://mcpo:8000"
+      # Qdrant
+      QDRANT_URI: "http://qdrant:6333"
+      QDRANT_API_KEY: "${QDRANT_API_KEY}"
+      RAG_EMBEDDING_MODEL: "${RAG_EMBEDDING_MODEL:-text-embedding-3-small}"
+      # PostgreSQL — base dédiée LangGraph
+      DATABASE_URL: "postgresql://${PG_USER:-openwebui}:${PG_PASS}@postgres:5432/langgraph"
+      # Open Terminal (bash MCP)
+      OPEN_TERMINAL_URL: "http://open-terminal:8000"
+      OPEN_TERMINAL_API_KEY: "${OPEN_TERMINAL_API_KEY}"
+      # Context7 (cloud public)
+      CONTEXT7_API_KEY: "${CONTEXT7_API_KEY:-}"
+      # Playwright (outil natif OpenWebUI, MCP Streamable HTTP)
+      PLAYWRIGHT_URL: "http://playwright:8931"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9099/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+      mcpo:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      open-terminal:
+        condition: service_started
+      playwright:
+        condition: service_started
+    restart: always
+    networks:
+      - llm-network
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    ports:
+      - "4000:4000"   # API + UI d'administration
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    environment:
+      # Base dédiée, même instance postgres
+      DATABASE_URL: "postgresql://${PG_USER:-openwebui}:${PG_PASS}@postgres:5432/litellm"
+      # Index Redis séparé (DB 1) pour éviter toute collision avec OpenWebUI (DB 0)
+      REDIS_URL: "redis://redis:6379/1"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY}"
+      # UI d'administration LiteLLM
+      UI_USERNAME: "${LITELLM_UI_USERNAME:-admin}"
+      UI_PASSWORD: "${LITELLM_UI_PASSWORD}"
+      # Clés fournisseurs (toutes optionnelles, selon usage)
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_API_BASE: "${OPENROUTER_API_BASE:-https://openrouter.ai/api/v1}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      AZURE_API_KEY: "${AZURE_API_KEY:-}"
+      AZURE_API_BASE: "${AZURE_API_BASE:-}"
+      AZURE_API_VERSION: "${AZURE_API_VERSION:-}"
+      POLLINATIONS_API_KEY: "${POLLINATIONS_API_KEY:-}"
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "4"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # BASE DE DONNÉES
+  # ──────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: openwebui-postgres
+    environment:
+      POSTGRES_DB: openwebui
+      POSTGRES_USER: ${PG_USER:-openwebui}
+      POSTGRES_PASSWORD: ${PG_PASS}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Script d'init : crée la base "litellm" au premier démarrage
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    # ports:
+    #   - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-openwebui} -d openwebui"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # VECTOR DB
+  # ──────────────────────────────────────────────
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: openwebui-qdrant
+    # ports:
+    #   - "6333:6333"
+    #   - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__API_KEY: "${QDRANT_API_KEY}"
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+    restart: always
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # CACHE
+  # ──────────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+    container_name: openwebui-redis
+    # ports:
+    #   - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --databases 16
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: always
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # MCP PROXY — outils (memory, duckdb, etc.)
+  # Context7 se connecte directement depuis OpenWebUI via HTTP remote.
+  # Voir : Admin Panel → Settings → Tools → MCP Servers
+  # ──────────────────────────────────────────────
+
+  mcpo:
+    image: ghcr.io/open-webui/mcpo:main
+    container_name: mcpo
+    ports:
+      - "3722:8000"
+    command: ["mcpo", "--config", "/config/mcpo_config.json"]
+    volumes:
+      - ./mcpo_config.json:/config/mcpo_config.json:ro,Z
+      - mcp_memory:/data/memory
+      - mcp_duckdb:/data/duckdb
+      - mcp_uploads:/data/uploads
+      - mcp_exports:/data/exports
+      - mcp_papers:/data/papers
+    restart: always
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # PLAYWRIGHT — image officielle Microsoft
+  # ──────────────────────────────────────────────
+  # Chromium + serveur MCP intégrés — zéro installation
+  # au runtime, contrairement à l'ancienne approche npx.
+  #
+  # OpenWebUI et Alyx se connectent directement via MCP Streamable HTTP :
+  #   Admin Panel → Settings → Tools → MCP Servers
+  #   → Ajouter : http://playwright:8931
+  # ──────────────────────────────────────────────
+
+  playwright:
+    image: mcr.microsoft.com/playwright/mcp:latest
+    container_name: playwright
+    command: ["--port", "8931", "--host", "0.0.0.0", "--headless", "--isolated"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8931/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # Port interne uniquement — OpenWebUI s'y connecte via le réseau Docker
+    # ports:
+    #   - "8931:8931"
+    restart: on-failure:5
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # DOCUMENT PARSING
+  # ──────────────────────────────────────────────
+
+  tika:
+    image: apache/tika:latest-full
+    container_name: tika
+    # ports:
+    #   - "9998:9998"
+    restart: unless-stopped
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # TERMINAL WEB
+  # ──────────────────────────────────────────────
+
+  open-terminal:
+    image: ghcr.io/open-webui/open-terminal
+    container_name: open-terminal
+    environment:
+      OPEN_TERMINAL_API_KEY: "${OPEN_TERMINAL_API_KEY}"
+    volumes:
+      - open_terminal_data:/home/user
+    # ports:
+    #   - "3723:8000"
+    restart: unless-stopped
+    networks:
+      - llm-network
+
+# ──────────────────────────────────────────────
+# VOLUMES
+# ──────────────────────────────────────────────
+
+volumes:
+  open-webui:
+    driver: local
+  postgres_data:
+    driver: local
+  qdrant_storage:
+    driver: local
+  redis_data:
+    driver: local
+  mcp_memory:
+    driver: local
+  mcp_duckdb:
+    driver: local
+  mcp_uploads:
+    driver: local
+  mcp_exports:
+    driver: local
+  mcp_papers:
+    driver: local
+  open_terminal_data:
+    driver: local
+
+# ──────────────────────────────────────────────
+# RÉSEAU
+# ──────────────────────────────────────────────
+
+networks:
+  llm-network:
+    external: true
