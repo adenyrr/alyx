@@ -1,5 +1,4 @@
 name: llm-openwebui
-
 services:
 
   # ──────────────────────────────────────────────
@@ -77,8 +76,6 @@ services:
         condition: service_started
       tika:
         condition: service_started
-      playwright:
-        condition: service_started
     restart: always
     networks:
       - llm-network
@@ -111,13 +108,6 @@ services:
       RAG_EMBEDDING_MODEL: "${RAG_EMBEDDING_MODEL:-text-embedding-3-small}"
       # PostgreSQL — base dédiée LangGraph
       DATABASE_URL: "postgresql://${PG_USER:-openwebui}:${PG_PASS}@postgres:5432/langgraph"
-      # Open Terminal (bash MCP)
-      OPEN_TERMINAL_URL: "http://open-terminal:8000"
-      OPEN_TERMINAL_API_KEY: "${OPEN_TERMINAL_API_KEY}"
-      # Context7 (cloud public)
-      CONTEXT7_API_KEY: "${CONTEXT7_API_KEY:-}"
-      # Playwright (outil natif OpenWebUI, MCP Streamable HTTP)
-      PLAYWRIGHT_URL: "http://playwright:8931"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9099/ || exit 1"]
       interval: 15s
@@ -134,8 +124,6 @@ services:
       qdrant:
         condition: service_started
       open-terminal:
-        condition: service_started
-      playwright:
         condition: service_started
     restart: always
     networks:
@@ -260,8 +248,6 @@ services:
 
   # ──────────────────────────────────────────────
   # MCP PROXY — outils (memory, duckdb, etc.)
-  # Context7 se connecte directement depuis OpenWebUI via HTTP remote.
-  # Voir : Admin Panel → Settings → Tools → MCP Servers
   # ──────────────────────────────────────────────
 
   mcpo:
@@ -277,35 +263,10 @@ services:
       - mcp_uploads:/data/uploads
       - mcp_exports:/data/exports
       - mcp_papers:/data/papers
+    environment:
+      CONTEXT7_API_KEY: "${CONTEXT7_API_KEY:-}"
+      OPEN_TERMINAL_API_KEY: "${OPEN_TERMINAL_API_KEY:-}"
     restart: always
-    networks:
-      - llm-network
-
-  # ──────────────────────────────────────────────
-  # PLAYWRIGHT — image officielle Microsoft
-  # ──────────────────────────────────────────────
-  # Chromium + serveur MCP intégrés — zéro installation
-  # au runtime, contrairement à l'ancienne approche npx.
-  #
-  # OpenWebUI et Alyx se connectent directement via MCP Streamable HTTP :
-  #   Admin Panel → Settings → Tools → MCP Servers
-  #   → Ajouter : http://playwright:8931
-  # ──────────────────────────────────────────────
-
-  playwright:
-    image: mcr.microsoft.com/playwright/mcp:latest
-    container_name: playwright
-    command: ["--port", "8931", "--host", "0.0.0.0", "--headless", "--isolated"]
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8931/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    # Port interne uniquement — OpenWebUI s'y connecte via le réseau Docker
-    # ports:
-    #   - "8931:8931"
-    restart: on-failure:5
     networks:
       - llm-network
 
