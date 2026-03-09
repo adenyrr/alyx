@@ -47,3 +47,6 @@ class AlyxState(TypedDict):
 
     # Artifacts générés (blocs html/js/py, images url…) — concat reducer
     artifacts: Annotated[list[dict[str, Any]], _concat_lists]
+
+    # Config Pollinations injectée par la pipeline (enable, model, width, height, enhance, api_key)
+    _pollinations: dict[str, Any]

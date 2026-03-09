@@ -1,7 +1,7 @@
 """
-Data Agent — calcul mathématique, analyse de données, requêtes DuckDB.
-Modèle : GPT-OSS 120B.
-Outils : calculator, duckdb (MCPO).
+Data Agent — calcul mathématique, données financières, requêtes DuckDB.
+Modèle : openrouter/deepseek.
+Outils : calculator, duckdb, yahoo-finance (MCPO).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from tools.mcpo_client import call_tool
 if TYPE_CHECKING:
     from graph.state import AlyxState
 
-_MODEL = "openrouter/gpt-oss"
+_MODEL = "openrouter/deepseek"
 _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
 _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 
@@ -70,6 +70,24 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         except Exception as exc:
             context_parts.append(f"## DuckDB failed\n{exc}")
 
+    # Yahoo Finance si ticker/action détecté
+    ticker = _extract_ticker(user_text)
+    if ticker:
+        try:
+            result = await call_tool("yahoo-finance", "get_stock_info", {"symbol": ticker})
+            context_parts.append(f"## Yahoo Finance ({ticker})\n{json.dumps(result, ensure_ascii=False, indent=2)[:3000]}")
+        except Exception as exc:
+            context_parts.append(f"## Yahoo Finance failed ({ticker})\n{exc}")
+
+    # Yahoo Finance si ticker/action détecté
+    ticker = _extract_ticker(user_text)
+    if ticker:
+        try:
+            result = await call_tool("yahoo-finance", "get_stock_info", {"symbol": ticker})
+            context_parts.append(f"## Yahoo Finance ({ticker})\n{json.dumps(result, ensure_ascii=False, indent=2)[:3000]}")
+        except Exception as exc:
+            context_parts.append(f"## Yahoo Finance failed ({ticker})\n{exc}")
+
     context = "\n\n".join(context_parts)
     llm = ChatOpenAI(
         model=model or _MODEL,
@@ -98,6 +116,18 @@ def _extract_math_expression(text: str) -> str:
     if m and any(op in m.group(1) for op in ["+", "-", "*", "/", "^", "**", "%"]):
         return m.group(1).strip()
     return ""
+
+
+def _extract_ticker(text: str) -> str:
+    """Détecte un ticker boursier (ex: AAPL, BTC-USD, ^GSPC) dans le texte."""
+    m = re.search(r"\b([A-Z]{1,5}(?:-[A-Z]{2,4})?|\^[A-Z]+)\b", text)
+    return m.group(1) if m else ""
+
+
+def _extract_ticker(text: str) -> str:
+    """Détecte un ticker boursier (ex: AAPL, BTC-USD, ^GSPC) dans le texte."""
+    m = re.search(r"\b([A-Z]{1,5}(?:-[A-Z]{2,4})?)\b", text)
+    return m.group(1) if m else ""
 
 
 def _extract_sql_query(text: str) -> str:

@@ -10,6 +10,7 @@ Le thread_id correspond au chat_id OpenWebUI pour l'historique multi-tours.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Callable, Optional
 
@@ -21,10 +22,11 @@ from psycopg_pool import AsyncConnectionPool
 
 from graph.state import AlyxState
 from graph.supervisor import route
-import agents.vision as vision_agent
-import agents.scholar as scholar_agent
-import agents.dev as dev_agent
+import agents.wikipedia as wikipedia_agent
 import agents.web as web_agent
+import agents.doc as doc_agent
+import agents.geo as geo_agent
+import agents.dev as dev_agent
 import agents.media as media_agent
 import agents.data as data_agent
 import agents.memory_agent as memory_mod
@@ -32,10 +34,11 @@ import agents.image_gen as image_gen_agent
 import agents.rag_agent as rag_agent
 
 _AGENT_MAP: dict[str, Callable] = {
-    "vision":    vision_agent.run,
-    "scholar":   scholar_agent.run,
-    "dev":       dev_agent.run,
+    "wikipedia": wikipedia_agent.run,
     "web":       web_agent.run,
+    "doc":       doc_agent.run,
+    "geo":       geo_agent.run,
+    "dev":       dev_agent.run,
     "media":     media_agent.run,
     "data":      data_agent.run,
     "memory":    memory_mod.run,
@@ -54,11 +57,33 @@ def _make_node(fn: Callable, model: str | None) -> Callable:
     le déclare dans sa propre signature.
     """
     _pass_config = "config" in inspect.signature(fn).parameters
+    _agent_name = fn.__module__.split(".")[-1].replace("_agent", "")
 
     async def _node(state: AlyxState, config: Optional[RunnableConfig] = None) -> dict:
-        if _pass_config:
-            return await fn(state, config=config, model=model)
-        return await fn(state, model=model)
+        try:
+            if _pass_config:
+                result = await asyncio.wait_for(
+                    fn(state, config=config, model=model), timeout=30.0
+                )
+            else:
+                result = await asyncio.wait_for(
+                    fn(state, model=model), timeout=30.0
+                )
+            return result
+        except asyncio.TimeoutError:
+            return {
+                "agent_outputs": {
+                    _agent_name: "⚠️ [Timeout 30s] Agent non disponible — réessayez."
+                },
+                "artifacts": [],
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "agent_outputs": {
+                    _agent_name: f"⚠️ [Erreur agent] {exc!s}"
+                },
+                "artifacts": [],
+            }
 
     return _node
 

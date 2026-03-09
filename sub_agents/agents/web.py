@@ -1,37 +1,67 @@
 """
-Web Agent — navigation, scraping et recherche web.
-Modèle : GPT-OSS 120B.
-Outil : playwright MCP (service natif OpenWebUI, transport Streamable HTTP).
+Web Agent — recherche DuckDuckGo + extraction de contenu.
 
-Playwright est fourni comme outil natif par le service playwright du compose.
-La connexion se fait directement vers http://playwright:8931,
-évité de passer par MCPO (playwright n'y est pas configuré).
+Modèle : openrouter/qwen3.5-flash.
+Outils :
+  1. duckduckgo (MCPO)  — 3-5 mots-clés, résultats avec URLs.
+  2. fetch-web (MCPO)   — récupération rapide du contenu de chaque URL.
+  3. playwright_client  — fallback si fetch-web échoue (navigateur réel).
+
+Stratégie :
+  a. LLM extrait 3-5 mots-clés de recherche.
+  b. DuckDuckGo → liste de résultats avec URLs.
+  c. Pour les 3 premières URLs : fetch-web → si erreur → playwright.
+  d. LLM synthétise avec sources.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from tools.playwright_client import fetch_url, search_web
+from tools.mcpo_client import call_tool
+from tools.playwright_client import fetch_url as playwright_fetch
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
 
-_MODEL = "openrouter/gpt-oss"
+_MODEL = "openrouter/qwen3.5-flash"
 _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
 _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 
-_SYSTEM_TEMPLATE = """\
-You are a web research assistant. You have access to a real Chromium browser via Playwright.
-Use the provided browser results to answer questions about web pages, news, current events, or online content.
-Summarize findings accurately, quote relevant excerpts, and include source URLs.
-Today's date: {current_date}. Prioritize the most recent content available.
-Reply in English.
+_SYSTEM = """\
+Tu es un·e assistant·e de recherche web. Utilise les résultats de recherche
+fournis pour répondre avec précision. Cite systématiquement les URLs sources.
+Indique la date des informations si disponible.
+Réponds dans la même langue que la question.
 """
+
+_KW_SYSTEM = """\
+Extrais 3 à 5 mots-clés de recherche optimisés pour DuckDuckGo depuis le message
+utilisateur. Si une URL est présente, retourne-la directement.
+Retourne UNIQUEMENT les mots-clés séparés par des espaces, sans explication.
+"""
+
+
+async def _fetch_url_with_fallback(url: str) -> str:
+    """Tente fetch-web (MCPO) puis playwright en fallback."""
+    try:
+        result = await call_tool("fetch-web", "fetch", {"url": url, "max_length": 4000})
+        content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+        if content and content.strip() and content.strip() != "{}":
+            return content[:4000]
+        raise ValueError("empty fetch-web response")
+    except Exception:
+        # Fallback playwright
+        try:
+            return await playwright_fetch(url)
+        except Exception as exc:
+            return f"Inaccessible : {exc}"
 
 
 async def run(state: "AlyxState", model: str | None = None) -> dict:
@@ -39,33 +69,55 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     user_text = _last_user_message(messages)
     current_date = state.get("current_date", "")
 
-    # Enrichir la requête avec la date complète pour favoriser des résultats récents cohérents.
-    search_query = f"{user_text} {current_date}" if current_date else user_text
-
-    # Navigation via playwright MCP Streamable HTTP
-    browser_result = ""
-    try:
-        url = _extract_url(user_text)
-        if url:
-            browser_result = await fetch_url(url)
-            browser_result = f"Page: {url}\n{browser_result}"
-        else:
-            browser_result = await search_web(search_query)
-    except Exception as exc:
-        browser_result = f"Browser navigation failed: {exc}"
-
-    system_prompt = _SYSTEM_TEMPLATE.format(current_date=current_date or "unknown")
-
     llm = ChatOpenAI(
         model=model or _MODEL,
         base_url=_LITELLM_URL,
         api_key=_LITELLM_API_KEY,
-        temperature=0.2,
+        temperature=0,
+        max_tokens=2048,
     )
 
-    prompt = f"## Browser result\n{browser_result}\n\nUser question: {user_text}"
+    # 1. Extraire les mots-clés / URL explicite
+    kw_resp = await llm.ainvoke(
+        [SystemMessage(content=_KW_SYSTEM), HumanMessage(content=user_text)],
+        config={"max_tokens": 40},
+    )
+    keywords = kw_resp.content.strip().replace("\n", " ")[:120]
+
+    context_parts: list[str] = []
+
+    # Cas URL explicite dans la question
+    explicit_url = _extract_url(user_text)
+    if explicit_url:
+        content = await _fetch_url_with_fallback(explicit_url)
+        context_parts.append(f"## Contenu de {explicit_url}\n{content}")
+    else:
+        # 2. Recherche DuckDuckGo
+        ddg_raw = ""
+        try:
+            ddg_result = await call_tool("duckduckgo", "search", {
+                "query": keywords,
+                "max_results": 5,
+            })
+            ddg_raw = json.dumps(ddg_result, ensure_ascii=False, indent=2)
+            context_parts.append(f"## Résultats DuckDuckGo ({keywords!r})\n{ddg_raw[:3000]}")
+
+            # 3. Visiter les 3 premières URLs
+            urls = _extract_urls_from_ddg(ddg_result)[:3]
+            for url in urls:
+                content = await _fetch_url_with_fallback(url)
+                context_parts.append(f"## Contenu de {url}\n{content}")
+        except Exception as exc:
+            context_parts.append(f"## DuckDuckGo indisponible\n{exc}")
+
+    if current_date:
+        context_parts.insert(0, f"## Date actuelle : {current_date}")
+
+    context = "\n\n".join(context_parts)
+    prompt = f"{context}\n\nQuestion utilisateur : {user_text}"
+
     response = await llm.ainvoke([
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
     ])
 
@@ -73,9 +125,28 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
 
 
 def _extract_url(text: str) -> str:
-    import re
     match = re.search(r"https?://[^\s]+", text)
     return match.group(0) if match else ""
+
+
+def _extract_urls_from_ddg(data) -> list[str]:
+    """Extrait les URLs depuis différents formats de réponse DuckDuckGo."""
+    urls: list[str] = []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                url = item.get("url") or item.get("href") or item.get("link", "")
+                if url and url.startswith("http"):
+                    urls.append(url)
+    elif isinstance(data, dict):
+        for key in ("results", "items", "organic"):
+            items = data.get(key, [])
+            for item in items:
+                if isinstance(item, dict):
+                    url = item.get("url") or item.get("href") or item.get("link", "")
+                    if url and url.startswith("http"):
+                        urls.append(url)
+    return urls
 
 
 def _last_user_message(messages: list) -> str:

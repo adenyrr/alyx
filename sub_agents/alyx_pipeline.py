@@ -1,7 +1,7 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.3.0
+version: 0.4.0
 requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, openai>=1.0, pydantic>=2.0
 """
 
@@ -48,17 +48,18 @@ _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
 _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 _DB_URL = os.environ.get("DATABASE_URL", "")
 
-# Icônes de statut par agent
+# Icônes et libellés de statut par agent
 _AGENT_ICONS = {
-    "vision":    "📷 Vision",
-    "scholar":   "🔬 Scholar",
+    "wikipedia": "📖 Wikipédia",
+    "web":       "🌐 Recherche",
+    "doc":       "🔬 Documentaliste",
     "dev":       "⚙️ Dev",
-    "web":       "🌐 Web",
-    "media":     "🎬 Media",
-    "data":      "📊 Data",
-    "memory":    "🧠 Memory",
+    "media":     "🎬 Média",
+    "data":      "📊 Données",
+    "memory":    "🧠 Mémoire",
     "image_gen": "🎨 ImageGen",
-    "rag":       "📚 RAG",
+    "rag":       "📚 Documents",
+    "geo":       "🗺️ Géographie",
 }
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,45 +68,51 @@ _LOGGER = logging.getLogger(__name__)
 _DONE = object()
 
 _ALYX_SYSTEM_TEMPLATE = """\
-Tu es Alyx, une assistante IA conversationnelle intelligente, chaleureuse et précise.
-Tu t'exprimes EXCLUSIVEMENT en français, quelles que soient la langue ou la formulation de l'utilisateur.
+Tu es Alyx, une intelligence artificielle conversationnelle multi-agents développé.e par adenyrr.
+Tu n'es ni masculin·e ni féminin·e — toujours neutre (point médian : "développé·e", "conçu·e", "basé·e").
+Tu t'exprimes EXCLUSIVEMENT en {language}, quelle que soit la langue de l'utilisateur·ice.
 
 Date du jour : {current_date}
 
-Tu orchestres des agents spécialisés qui travaillent en arrière-plan pour toi.
-Quand leurs résultats te sont fournis, intègre-les naturellement dans ta réponse sans mentionner
-les détails techniques du pipeline (noms d'agents, processus interne, etc.).
+═══════════════ COMPORTEMENT ════════════════
+Tu utilises TOUJOURS des balises <think>…</think> pour raisonner AVANT de répondre.
+Dans ces balises, inclus :
+  - Ton analyse de la demande
+  - Les résultats bruts des agents invoqués (tels quels)
+  - Ton plan de synthèse
+La réponse finale arrive APRÈS la fermeture </think>, hors des balises.
 
 RÈGLE ABSOLUE — Réponses directes et complètes :
-  - INTERDIT : "Je vais chercher", "Je sollicite un agent", "Je reviens dès que", "en cours de
-    récupération", "une fois les données obtenues", "je lance une recherche", ou tout texte
-    indiquant que tu attends, délègues, ou vas revenir avec un résultat ultérieur.
-  - Les agents ont DÉJÀ terminé. Leurs résultats sont intégralement dans ce prompt.
-  - Si des résultats agents sont fournis → synthétise-les IMMÉDIATEMENT, sans préambule.
-  - Si les résultats sont vides ou insuffisants → réponds directement sur tes connaissances
+  - Les agents ont DÉJÀ terminé. Leurs résultats sont dans ce prompt.
+  - Si des résultats agents sont fournis → synthétise-les IMMÉDIATEMENT.
+  - Si les résultats sont vides ou insuffisants → réponds sur tes connaissances
     en précisant que les données fraîches peuvent nécessiter une vérification en ligne.
-  - Ne génère JAMAIS de réponse en deux étapes ni de promesses de résultat futur.
+  - INTERDIT : "Je vais chercher", "Je sollicite un agent", "Je reviens dès que",
+    "en cours de récupération", "je lance une recherche", ou tout texte promettant
+    un résultat futur. Tout est déjà là.
 
-Artifacts (OBLIGATOIRE) :
-  - Tu ne génères JAMAIS toi-même des blocs de code ```html, ```javascript ou ```python.
-    L'agent DEV est le SEUL producteur d'artifacts. Alyx synthétise et présente ; elle ne code pas.
-  - Si un agent a fourni un bloc ```html, ```javascript ou ```python, REPRODUIS-LE INTÉGRALEMENT
-    dans ta réponse, sans le modifier, raccourcir ou résumer.
-  - Ne paraphrase jamais un artifact : inclus le bloc de code complet tel quel.
-  - Si une image a été générée (lien markdown ![...](url)), inclus le lien tel quel.
+═════════════ ARTIFACTS ═════════════
+L'agent DEV est le SEUL producteur d'artifacts (blocs ```html, ```javascript, ```python).
+Alyx synthétise et présente ; elle ne code PAS.
+Si un agent a fourni un bloc de code, REPRODUIS-LE INTÉGRALEMENT, sans le modifier.
+Ne paraphrase jamais un artifact.
+Si une image a été générée (lien markdown ![...](url)), inclus le lien tel quel.
 
-Directives de contenu :
-  - Réponds toujours en français, de façon fluide et naturelle
-  - Sois concise pour les réponses simples, détaillée pour les sujets complexes
-  - Si aucun agent spécialisé n'a été invoqué, réponds directement sans préambule
+═════════════ VISION ═════════════
+Tu as des capacités natives de vision. Si des images t'ont été transmises,
+analyse-les directement sans mentionner d'agent ou de processus interne.
 
-Sources et citations (OBLIGATOIRE) :
-  - Cite toujours tes sources avec des liens Markdown quand disponibles : [Titre](url)
-  - Pour les articles académiques : auteurs, titre, journal, année, DOI si disponible
-  - Pour les bibliothèques/frameworks : lien vers la documentation officielle
-  - Pour les données factuelles : cite l'origine (ex : Wikipedia, World Bank, PubMed)
-  - Format préféré : > 📖 [Auteurs (année) — *Titre*](url-doi-ou-source)
-  - Si l'agent a fourni des sources, reprends-les fidèlement dans ta synthèse
+══════════════ SOURCES (OBLIGATOIRE) ═══════════════
+À la fin de chaque réponse (hors balises <think>) :
+  - Cite toutes les sources avec des liens Markdown : [Titre](url)
+  - Pour les articles académiques : auteurs, titre, journal, année, DOI
+  - Format : > 📖 [Auteurs (année) — *Titre*](url)
+  - Reprends fidèlement les sources fournies par les agents.
+
+══════════════ SIGNATURE (OBLIGATOIRE) ═════════════
+Termine TOUJOURS par une ligne de signature :
+  ---
+  *🤖 Alyx `{alyx_model}` · [Agent Nomᵢ `modèle_i`] · ...*
 """
 
 
@@ -153,28 +160,41 @@ class Pipeline:
         litellm_url: str = Field(default=_LITELLM_URL, description="LiteLLM API URL")
         litellm_api_key: str = Field(default=_LITELLM_API_KEY, description="LiteLLM API key")
         db_url: str = Field(default=_DB_URL, description="PostgreSQL connection string (LangGraph checkpoint)")
+
         # --- Alyx (synthèse finale) ---
-        alyx_model: str = Field(default="openrouter/gpt-oss", description="Modèle de synthèse finale d'Alyx")
+        alyx_model: str = Field(default="openrouter/qwen3.5-flash", description="Modèle de synthèse finale d'Alyx")
         alyx_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Température de synthèse Alyx")
+        language: str = Field(default="français", description="Langue des réponses d'Alyx (ex: français, english, español)")
         history_messages: int = Field(default=12, ge=2, le=40, description="Nombre de messages d'historique envoyés à Alyx")
+
         # --- Comportement ---
         stream_agent_status: bool = Field(default=True, description="Streamer une ligne de statut avant la réponse (agents invoqués)")
-        show_model_footer: bool = Field(default=True, description="Afficher un pied de page après la réponse (modèle + agents)")
-        show_reasoning: bool = Field(default=False, description="Afficher le raisonnement interne du modèle (balises <think> ou champ reasoning_content)")
+        show_model_footer: bool = Field(default=True, description="Afficher un pied de page (modèle + agents) en fin de réponse")
+        show_reasoning: bool = Field(default=True, description="Afficher le raisonnement interne (balises <think> ou champ reasoning_content)")
         realtime_status: bool = Field(default=True, description="Émettre des statuts OpenWebUI en temps réel (quel agent travaille)")
         enable_memory_bg: bool = Field(default=True, description="Activer la condensation mémoire en arrière-plan")
+
         # --- Superviseur ---
         supervisor_model: str = Field(default="openrouter/qwen3.5-flash", description="Modèle du superviseur (routage)")
+
         # --- Modèles agents ---
-        model_vision: str = Field(default="openrouter/qwen3.5-flash", description="Modèle Vision")
-        model_scholar: str = Field(default="openrouter/gpt-oss", description="Modèle Scholar")
-        model_dev: str = Field(default="openrouter/kimi-k2.5", description="Modèle Dev (code + artifacts)")
-        model_web: str = Field(default="openrouter/gpt-oss", description="Modèle Web")
-        model_media: str = Field(default="openrouter/qwen3.5-flash", description="Modèle Media")
-        model_data: str = Field(default="openrouter/qwen3.5-flash", description="Modèle Data")
-        model_memory: str = Field(default="openrouter/qwen3.5-flash", description="Modèle Memory")
-        model_image_gen: str = Field(default="pollinations/flux", description="Modèle ImageGen")
-        model_rag: str = Field(default="openrouter/gpt-oss", description="Modèle RAG")
+        model_wikipedia: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Wikipédia")
+        model_web: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Recherche web (DuckDuckGo + Playwright fallback)")
+        model_doc: str = Field(default="openrouter/deepseek", description="Modèle agent Documentaliste (publications scientifiques + Sci-hub)")
+        model_dev: str = Field(default="openrouter/kimi-k2.5", description="Modèle agent Dev (code + artifacts)")
+        model_media: str = Field(default="openrouter/gpt-oss", description="Modèle agent Média (YouTube, documents)")
+        model_data: str = Field(default="openrouter/deepseek", description="Modèle agent Données (calculs, SQL, Yahoo Finance)")
+        model_geo: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Géographie (météo OpenMeteo, OSM)")
+        model_memory: str = Field(default="openrouter/gpt-oss", description="Modèle agent Mémoire (knowledge graph)")
+        model_rag: str = Field(default="openrouter/gpt-oss", description="Modèle agent Documents (RAG Qdrant)")
+
+        # --- Génération d'images (Pollinations.ai — appel direct GET, sans passer par LiteLLM) ---
+        enable_image_gen: bool = Field(default=True, description="Activer la génération d'images via Pollinations.ai")
+        pollinations_api_key: str = Field(default="", description="Clé API Pollinations.ai (optionnelle — gratuit sans clé pour les modèles de base)")
+        pollinations_model: str = Field(default="flux", description="Modèle Pollinations : flux, zimage, gptimage, klein-large, imagen-4, seedream5, nanobanana, grok-imagine…")
+        pollinations_width: int = Field(default=1024, ge=64, le=4096, description="Largeur de l'image générée (pixels)")
+        pollinations_height: int = Field(default=1024, ge=64, le=4096, description="Hauteur de l'image générée (pixels)")
+        pollinations_enhance: bool = Field(default=True, description="Amélioration IA du prompt par Pollinations avant génération")
 
     def __init__(self):
         self.name = "Alyx"
@@ -227,15 +247,25 @@ class Pipeline:
         from graph.builder import build_graph
         models = {
             "supervisor": self.valves.supervisor_model,
-            "vision":     self.valves.model_vision,
-            "scholar":    self.valves.model_scholar,
-            "dev":        self.valves.model_dev,
+            "wikipedia":  self.valves.model_wikipedia,
             "web":        self.valves.model_web,
+            "doc":        self.valves.model_doc,
+            "dev":        self.valves.model_dev,
             "media":      self.valves.model_media,
             "data":       self.valves.model_data,
+            "geo":        self.valves.model_geo,
             "memory":     self.valves.model_memory,
-            "image_gen":  self.valves.model_image_gen,
+            "image_gen":  "pollinations.ai",
             "rag":        self.valves.model_rag,
+            # Paramètres Pollinations transmis aux agents via le dict models
+            "_pollinations": {
+                "enable":  self.valves.enable_image_gen,
+                "api_key": self.valves.pollinations_api_key,
+                "model":   self.valves.pollinations_model,
+                "width":   self.valves.pollinations_width,
+                "height":  self.valves.pollinations_height,
+                "enhance": self.valves.pollinations_enhance,
+            },
         }
         self._graph, self._pool = self._run_sync(build_graph(self.valves.db_url, models))
         self._models = models
@@ -285,6 +315,14 @@ class Pipeline:
             "routing": [],
             "agent_outputs": {},
             "artifacts": [],
+            "_pollinations": {
+                "enable":  self.valves.enable_image_gen,
+                "api_key": self.valves.pollinations_api_key,
+                "model":   self.valves.pollinations_model,
+                "width":   self.valves.pollinations_width,
+                "height":  self.valves.pollinations_height,
+                "enhance": self.valves.pollinations_enhance,
+            },
         }
 
         # 2. Lancer la coroutine graphe+synthèse et lire les tokens depuis la queue
@@ -346,12 +384,22 @@ class Pipeline:
             if not agent_outputs and not artifacts:
                 await _emit("✍️ Réponse directe…")
                 alyx_system = _ALYX_SYSTEM_TEMPLATE.format(
-                    current_date=datetime.now().strftime("%A %d %B %Y")
+                    current_date=datetime.now().strftime("%A %d %B %Y"),
+                    language=self.valves.language,
+                    alyx_model=self.valves.alyx_model,
                 )
                 direct_messages = [{"role": "system", "content": alyx_system}]
                 for m in messages[-self.valves.history_messages:]:
-                    direct_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
-                direct_messages.append({"role": "user", "content": user_message})
+                    r = m.get("role", "user")
+                    c = m.get("content", "")
+                    # Dernier message utilisateur : attacher les images pour vision native
+                    if r == "user" and images_b64 and m is messages[-1]:
+                        content_parts = [{"type": "text", "text": c if isinstance(c, str) else ""}]
+                        for b64 in images_b64[:4]:
+                            content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+                        direct_messages.append({"role": r, "content": content_parts})
+                    else:
+                        direct_messages.append({"role": r, "content": c if isinstance(c, str) else ""})
                 client = AsyncOpenAI(base_url=self.valves.litellm_url, api_key=self.valves.litellm_api_key)
                 stream = await client.chat.completions.create(
                     model=self.valves.alyx_model,
@@ -363,7 +411,7 @@ class Pipeline:
                     q.put(token)
                 await _emit("", done=True)
                 if self.valves.show_model_footer:
-                    q.put(f"\n\n---\n*✍️ `{self.valves.alyx_model}`*")
+                    q.put(f"\n\n---\n*🤖 Alyx `{self.valves.alyx_model}`*")
                 return
 
             # Ligne de statut agents (optionnelle)
@@ -374,23 +422,33 @@ class Pipeline:
                     if agent_outputs[name] and agent_outputs[name].strip()
                 )
                 if labels:
-                    q.put(f"> *Agents : {labels}*\n\n")
+                    q.put(f"> *Agents invoqués : {labels}*\n\n")
 
             # Synthèse finale
             await _emit("✍️ Rédaction de la réponse…")
             synthesis_context = _build_synthesis_context(agent_outputs, artifacts)
             synth_messages = [{"role": "system", "content": _ALYX_SYSTEM_TEMPLATE.format(
                 current_date=datetime.now().strftime("%A %d %B %Y"),
+                language=self.valves.language,
+                alyx_model=self.valves.alyx_model,
             )}]
             for m in messages[-self.valves.history_messages:]:
-                synth_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
-            if synthesis_context:
-                synth_messages.append({
-                    "role": "user",
-                    "content": f"[Résultats des agents spécialisés]\n{synthesis_context}\n\n[Message original de l'utilisateur]\n{user_message}",
-                })
+                r = m.get("role", "user")
+                c = m.get("content", "")
+                synth_messages.append({"role": r, "content": c if isinstance(c, str) else ""})
+
+            # Message de synthèse avec résultats agents + vision native si images présentes
+            agent_context_msg = (
+                f"[Résultats des agents spécialisés]\n{synthesis_context}\n\n"
+                f"[Message original de l'utilisateur·rice]\n{user_message}"
+            )
+            if images_b64:
+                img_parts: list = [{"type": "text", "text": agent_context_msg}]
+                for b64 in images_b64[:4]:
+                    img_parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+                synth_messages.append({"role": "user", "content": img_parts})
             else:
-                synth_messages.append({"role": "user", "content": user_message})
+                synth_messages.append({"role": "user", "content": agent_context_msg})
 
             client = AsyncOpenAI(base_url=self.valves.litellm_url, api_key=self.valves.litellm_api_key)
             stream = await client.chat.completions.create(
@@ -406,14 +464,15 @@ class Pipeline:
             # Pied de page
             if self.valves.show_model_footer:
                 _agent_models = {
-                    "vision":    self.valves.model_vision,
-                    "scholar":   self.valves.model_scholar,
-                    "dev":       self.valves.model_dev,
+                    "wikipedia": self.valves.model_wikipedia,
                     "web":       self.valves.model_web,
+                    "doc":       self.valves.model_doc,
+                    "dev":       self.valves.model_dev,
                     "media":     self.valves.model_media,
                     "data":      self.valves.model_data,
+                    "geo":       self.valves.model_geo,
                     "memory":    self.valves.model_memory,
-                    "image_gen": self.valves.model_image_gen,
+                    "image_gen": "pollinations.ai",
                     "rag":       self.valves.model_rag,
                 }
                 agent_parts = [
@@ -421,7 +480,7 @@ class Pipeline:
                     for name in agent_outputs
                     if agent_outputs[name] and agent_outputs[name].strip()
                 ]
-                synth_part = f"✍️ `{self.valves.alyx_model}`"
+                synth_part = f"🤖 Alyx `{self.valves.alyx_model}`"
                 if agent_parts:
                     footer = "\n\n---\n*" + "  ·  ".join(agent_parts) + "  ·  " + synth_part + "*"
                 else:
@@ -454,15 +513,11 @@ class Pipeline:
     @staticmethod
     def _stream_response(stream, show_reasoning: bool) -> "Generator[str, None, None]":
         """
-        Wrapper de stream OpenAI qui intercepte le raisonnement du modèle :
-          - Champ delta.reasoning_content  → modèles o-series / LiteLLM
-          - Balises <think>…</think>       → DeepSeek-R1, Qwen3, etc.
-        Si show_reasoning=True  : affiche dans un bloc cité avant la réponse.
-        Si show_reasoning=False : supprime silencieusement.
+        Wrapper de stream OpenAI synchrone.
+        - Balises <think>…</think> : passées TELLES QUELLES (rendu natif OpenWebUI).
+        - Champ delta.reasoning_content : converti en blockquote si show_reasoning=True.
         """
         reasoning_parts: list[str] = []
-        buf = ""
-        in_think = False
 
         def _flush_reasoning() -> str:
             block = "".join(reasoning_parts).strip()
@@ -475,10 +530,11 @@ class Pipeline:
             out += "\n\n"
             return out
 
+        buf = ""
+        in_think = False
         for chunk in stream:
             delta = chunk.choices[0].delta
 
-            # Champ reasoning_content (o-series, certains modèles via LiteLLM)
             rc = getattr(delta, "reasoning_content", None)
             if rc is None and getattr(delta, "model_extra", None):
                 rc = delta.model_extra.get("reasoning_content")
@@ -492,36 +548,31 @@ class Pipeline:
 
             buf += text
             out = ""
-
             while buf:
                 if in_think:
                     end = buf.find("</think>")
                     if end >= 0:
-                        reasoning_parts.append(buf[:end])
+                        out += buf[:end] + "</think>"
                         buf = buf[end + len("</think>"):]
                         in_think = False
-                        out += _flush_reasoning()
+                        reasoning_parts.clear()
                     else:
-                        reasoning_parts.append(buf)
+                        out += buf
                         buf = ""
                 else:
                     start = buf.find("<think>")
                     if start >= 0:
-                        out += buf[:start]
+                        out += buf[:start] + "<think>"
                         buf = buf[start + len("<think>"):]
                         in_think = True
                     else:
                         out += buf
                         buf = ""
-
             if out:
                 yield out
 
-        # Vider le buffer restant (cas sans </think> de clôture)
-        if buf and not in_think:
+        if buf:
             yield buf
-
-        # reasoning_content depuis le champ delta (sans <think>) — yield à la fin
         if reasoning_parts:
             flushed = _flush_reasoning()
             if flushed:
@@ -529,10 +580,14 @@ class Pipeline:
 
     @staticmethod
     async def _astream_response(stream, show_reasoning: bool):
-        """Version async de _stream_response, pour AsyncOpenAI streaming."""
+        """
+        Stream OpenAI async.
+        - Balises <think>…</think> passées TELLES QUELLES dans le stream
+          (rendu natif OpenWebUI — affiche le raisonnement en temps réel).
+        - Champ reasoning_content (delta, modèles o-series) : converti en blockquote
+          si show_reasoning=True, supprimé sinon.
+        """
         reasoning_parts: list[str] = []
-        buf = ""
-        in_think = False
 
         def _flush_reasoning() -> str:
             block = "".join(reasoning_parts).strip()
@@ -545,6 +600,8 @@ class Pipeline:
             out += "\n\n"
             return out
 
+        buf = ""
+        in_think = False
         async for chunk in stream:
             delta = chunk.choices[0].delta
 
@@ -561,34 +618,31 @@ class Pipeline:
 
             buf += text
             out = ""
-
             while buf:
                 if in_think:
                     end = buf.find("</think>")
                     if end >= 0:
-                        reasoning_parts.append(buf[:end])
+                        out += buf[:end] + "</think>"
                         buf = buf[end + len("</think>"):]
                         in_think = False
-                        out += _flush_reasoning()
+                        reasoning_parts.clear()
                     else:
-                        reasoning_parts.append(buf)
+                        out += buf
                         buf = ""
                 else:
                     start = buf.find("<think>")
                     if start >= 0:
-                        out += buf[:start]
+                        out += buf[:start] + "<think>"
                         buf = buf[start + len("<think>"):]
                         in_think = True
                     else:
                         out += buf
                         buf = ""
-
             if out:
                 yield out
 
-        if buf and not in_think:
+        if buf:
             yield buf
-
         if reasoning_parts:
             flushed = _flush_reasoning()
             if flushed:
@@ -596,11 +650,6 @@ class Pipeline:
 
     @staticmethod
     async def _run_graph(graph, initial_state: dict, config: dict, event_emitter=None, models: dict | None = None):
-        """Exécute le graphe LangGraph et collecte les sorties agents.
-
-        event_emitter optionnel : coroutine appelable OpenWebUI pour les statuts en temps réel.
-        models optionnel : dict agent_name → model_id pour les statuts dynamiques.
-        """
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
         pending: set[str] = set()
@@ -618,44 +667,32 @@ class Pipeline:
                     routing = node_output.get("routing", [])
                     if routing:
                         pending = set(routing)
-                        labels = "  ·  ".join(
-                            f"{_AGENT_ICONS.get(a, a)} ({(models or {}).get(a, '?')})"
-                            for a in routing
-                        )
-                        await _emit(f"Agents : {labels}")
+                        labels = "  ·  ".join(_AGENT_ICONS.get(a, a) for a in routing)
+                        await _emit(f"Invocation des agents : {labels}")
                     continue
 
                 icon = _AGENT_ICONS.get(node_name, node_name)
                 model_name = (models or {}).get(node_name, "?")
                 pending.discard(node_name)
                 if pending:
-                    remaining = "  ·  ".join(
-                        f"{_AGENT_ICONS.get(a, a)} ({(models or {}).get(a, '?')})"
-                        for a in pending
-                    )
-                    await _emit(f"✅ {icon} ({model_name}) · en cours : {remaining}")
+                    remaining_labels = "  ·  ".join(_AGENT_ICONS.get(a, a) for a in pending)
+                    await _emit(f"✅ {icon} — en cours : {remaining_labels}")
                 else:
                     await _emit(f"✅ {icon} ({model_name})")
 
-                outputs = node_output.get("agent_outputs", {})
-                agent_outputs.update(outputs)
-                new_artifacts = node_output.get("artifacts", [])
-                artifacts.extend(new_artifacts)
+                agent_outputs.update(node_output.get("agent_outputs", {}))
+                artifacts.extend(node_output.get("artifacts", []))
 
         return agent_outputs, artifacts
 
 
 def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict]) -> str:
-    """Construit le contexte de synthèse à injecter dans le prompt Alyx."""
     parts: list[str] = []
-
     for agent_name, output in agent_outputs.items():
         if output and output.strip():
             label = _AGENT_ICONS.get(agent_name, agent_name)
             parts.append(f"## {label}\n{output}")
-
     for artifact in artifacts:
         if artifact.get("type") == "image" and artifact.get("url"):
             parts.append(f"## Image générée\n![Image]({artifact['url']})")
-
     return "\n\n".join(parts)

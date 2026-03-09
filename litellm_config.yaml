@@ -19,9 +19,9 @@ model_list:
       model: openrouter/openai/gpt-oss-120b
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: openrouter/trinity
+  - model_name: openrouter/embedding
     litellm_params:
-      model: openrouter/arcee-ai/trinity-large-preview:free
+      model: openrouter/qwen/qwen3-embedding-8b
       api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: openrouter/kimi-k2.5
@@ -29,21 +29,15 @@ model_list:
       model: openrouter/moonshotai/kimi-k2.5
       api_key: os.environ/OPENROUTER_API_KEY
 
+  - model_name: openrouter/deepseek
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v3.2
+      api_key: os.environ/OPENROUTER_API_KEY
+
   - model_name: openrouter/qwen3.5-flash
     litellm_params:
       model: openrouter/qwen/qwen3.5-flash-02-23
       api_key: os.environ/OPENROUTER_API_KEY
-
-  - model_name: text-embedding-3-small
-    litellm_params:
-      model: openai/text-embedding-3-small
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: pollinations/flux
-    litellm_params:
-      model: openai/klein-large
-      api_base: https://gen.pollinations.ai/v1
-      api_key: os.environ/POLLINATIONS_API_KEY
 
   # ── Ollama — inférence locale ──────────────────────────────
   # Nécessite d'ajouter un service "ollama" au compose.yaml.
