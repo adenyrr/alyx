@@ -108,14 +108,6 @@
       "args": ["-y", "@upstash/context7-mcp", "--api-key", "${CONTEXT7_API_KEY}"]
     },
 
-    "open-terminal": {
-      "type": "streamable-http",
-      "url": "http://open-terminal:8000/mcp",
-      "headers": {
-        "Authorization": "${OPEN_TERMINAL_API_KEY}"
-    }
-    },
-
     "calculator": {
       "_comment": "Évaluation d'expressions mathématiques (bibliothèque math Python complète).",
       "command": "uvx",
