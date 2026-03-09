@@ -24,12 +24,15 @@ from urllib.parse import quote_plus
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 from tools.playwright_client import fetch_url as playwright_fetch
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
+
+_DOI_LINK_RE = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.[\w./()\-]+)", re.IGNORECASE)
 
 _MODEL = "openrouter/deepseek"
 _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
@@ -86,10 +89,20 @@ async def _fetch_scihub(doi: str) -> str:
     return ""
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
     current_date = state.get("current_date", "")
+
+    # Statuts en temps réel
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
 
     llm = ChatOpenAI(
         model=model or _MODEL,
@@ -107,10 +120,12 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     keywords = kw_resp.content.strip().replace("\n", " ")[:120]
     _prompt_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
     _completion_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
+    await _emit(f"🔍 Mots-clés : {keywords}")
 
     context_parts: list[str] = []
 
     # 2. Plan de recherche via sequential-thinking
+    await _emit("🧩 Plan de recherche…")
     try:
         seq_result = await call_tool("sequential-thinking", "sequentialthinking", {
             "thought": f"Research plan for: {keywords}"
@@ -121,6 +136,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         context_parts.append(f"## Sequential-thinking unavailable: {exc}")
 
     # 3. Recherche académique
+    await _emit("📚 Recherche dans les bases académiques…")
     try:
         papers_result = await call_tool("paper-search", "search_papers", {
             "query": keywords,
@@ -129,9 +145,11 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         papers_str = json.dumps(papers_result, ensure_ascii=False, indent=2)
         context_parts.append(f"## Paper search results ({keywords!r})\n{papers_str[:5000]}")
 
-        # 4. Pour chaque article avec DOI mais sans résumé complet → sci-hub
+        # 4. Pour chaque article avec DOI → sci-hub pour le texte intégral
         dois = _extract_dois(papers_result)
-        for doi in dois[:3]:  # max 3 articles via sci-hub
+        if dois:
+            await _emit(f"📄 Récupération de {min(len(dois), 3)} article(s) via Sci-Hub…")
+        for doi in dois[:3]:
             fulltext = await _fetch_scihub(doi)
             if fulltext:
                 context_parts.append(f"## Full text DOI:{doi}\n{fulltext}")
@@ -144,6 +162,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     context = "\n\n".join(context_parts)
     prompt = f"{context}\n\nQuestion : {user_text}"
 
+    await _emit("✍️ Synthèse des résultats…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
@@ -151,14 +170,23 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     _u = getattr(response, "usage_metadata", None) or {}
     _prompt_tokens += _u.get("input_tokens", 0) or 0
     _completion_tokens += _u.get("output_tokens", 0) or 0
+
+    # Remplacer les liens doi.org par sci-hub.st dans la réponse finale
+    output = _replace_doi_with_scihub(response.content)
+
     return {
-        "agent_outputs": {"doc": response.content},
+        "agent_outputs": {"doc": output},
         "agent_metrics": {"doc": {
             "prompt_tokens": _prompt_tokens,
             "completion_tokens": _completion_tokens,
             "model": model or _MODEL,
         }},
     }
+
+
+def _replace_doi_with_scihub(text: str) -> str:
+    """Remplace https://doi.org/10.xxx par https://sci-hub.st/10.xxx dans le texte."""
+    return _DOI_LINK_RE.sub(lambda m: f"https://sci-hub.st/{m.group(1)}", text)
 
 
 def _extract_dois(papers_data) -> list[str]:

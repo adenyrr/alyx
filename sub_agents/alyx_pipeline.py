@@ -710,7 +710,13 @@ class Pipeline:
 
         buf = ""
         in_think = False
-        think_buf = ""  # accumule les tokens à l'intérieur de <think>…</think>
+        current_think_tag = ""  # nom du tag ouvrant en cours (ex: "synchro", "think")
+        think_buf = ""  # accumule les tokens à filtrer à l'intérieur d'un tag de réflexion
+        # Pattern : détecte l'ouverture d'une balise de réflexion interne connue
+        _OPEN_RE = re.compile(
+            r"<(think(?:ing)?|synchro|inner[_\s]monologue|plan(?:[_\s]de[_\s]synth[èe]se)?)[^>]*>",
+            re.IGNORECASE,
+        )
         async for chunk in stream:
             # Capturer les données d'usage du dernier chunk (stream_options include_usage)
             if usage_out is not None and getattr(chunk, "usage", None):
@@ -736,15 +742,16 @@ class Pipeline:
             out = ""
             while buf:
                 if in_think:
-                    end = buf.find("</think>")
+                    close_tag = f"</{current_think_tag}>"
+                    end = buf.lower().find(close_tag.lower())
                     if end >= 0:
                         inner = buf[:end]
-                        buf = buf[end + len("</think>"):]
+                        buf = buf[end + len(close_tag):]
                         in_think = False
                         if show_reasoning:
-                            # Passer le bloc complet tel quel
-                            out += think_buf + inner + "</think>"
+                            out += think_buf + inner + close_tag
                         think_buf = ""
+                        current_think_tag = ""
                         reasoning_parts.clear()
                     else:
                         if show_reasoning:
@@ -753,17 +760,22 @@ class Pipeline:
                             think_buf += buf  # avaler sans émettre
                         buf = ""
                 else:
-                    start = buf.find("<think>")
-                    if start >= 0:
-                        out += buf[:start]
-                        buf = buf[start + len("<think>"):]
+                    m = _OPEN_RE.search(buf)
+                    if m:
+                        out += buf[:m.start()]
+                        current_think_tag = m.group(1).lower()
+                        buf = buf[m.end():]
                         in_think = True
                         if show_reasoning:
-                            out += "<think>"
+                            out += m.group(0)
                         think_buf = ""
                     else:
-                        out += buf
-                        buf = ""
+                        # Garder un suffixe en buffer pour les tags fragmentés entre chunks
+                        # (ex: "<think" reçu, ">" arrivera dans le prochain chunk)
+                        safe_split = max(0, len(buf) - 30)
+                        out += buf[:safe_split]
+                        buf = buf[safe_split:]
+                        break
             if out:
                 yield out
 
@@ -867,8 +879,17 @@ class Pipeline:
 
 
 def _strip_think_tags(text: str) -> str:
-    """Supprime les blocs <think>…</think> des sorties d'agents (ex: deepseek)."""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    """Supprime les blocs de réflexion interne XML des sorties d'agents.
+    Gère : <think>, <thinking>, <synchro>, <inner_monologue>, <plan de synthèse>, etc.
+    """
+    # Balises connues (insensible à la casse, attributs possibles, espaces dans le nom)
+    _KNOWN_THINK_TAGS = r"think(?:ing)?|synchro|inner[_\s]monologue|plan(?:[_\s]de[_\s]synth[èe]se)?"
+    return re.sub(
+        rf"<({_KNOWN_THINK_TAGS})[^>]*>.*?</\1>",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    ).strip()
 
 
 def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict]) -> str:
