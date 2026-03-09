@@ -110,7 +110,7 @@
 
     "open-terminal": {
       "type": "streamable-http",
-      "url": "http://open-terminal:8000/",
+      "url": "http://open-terminal:8000/mcp",
       "headers": {
         "Authorization": "${OPEN_TERMINAL_API_KEY}"
     }
