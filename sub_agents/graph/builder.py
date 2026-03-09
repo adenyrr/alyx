@@ -32,6 +32,7 @@ import agents.data as data_agent
 import agents.memory_agent as memory_mod
 import agents.image_gen as image_gen_agent
 import agents.rag_agent as rag_agent
+import agents.reasoning as reasoning_agent
 
 _AGENT_MAP: dict[str, Callable] = {
     "wikipedia": wikipedia_agent.run,
@@ -44,10 +45,23 @@ _AGENT_MAP: dict[str, Callable] = {
     "memory":    memory_mod.run,
     "image_gen": image_gen_agent.run,
     "rag":       rag_agent.run,
+    "reasoning": reasoning_agent.run,
 }
 
+# Timeouts individuels en secondes (par défaut 45 s)
+_AGENT_TIMEOUTS: dict[str, int] = {
+    "reasoning": 120,  # plusieurs appels LLM + sequential-thinking MCP
+    "doc":       90,   # sci-hub + requêtes académiques
+    "media":     90,   # transcription YouTube
+    "image_gen": 130,  # Pollinations.ai (timeout interne 120 s)
+    "dev":       60,   # Context7 + terminal
+    "web":       50,   # DuckDuckGo + fetch multiple URLs
+    "wikipedia": 50,
+}
+_DEFAULT_AGENT_TIMEOUT = 45
 
-def _make_node(fn: Callable, model: str | None) -> Callable:
+
+def _make_node(fn: Callable, model: str | None, timeout: int = _DEFAULT_AGENT_TIMEOUT) -> Callable:
     """Crée un nœud LangGraph avec annotation RunnableConfig explicite.
 
     `functools.partial` perd les annotations de type, ce qui empêche LangGraph
@@ -63,17 +77,17 @@ def _make_node(fn: Callable, model: str | None) -> Callable:
         try:
             if _pass_config:
                 result = await asyncio.wait_for(
-                    fn(state, config=config, model=model), timeout=30.0
+                    fn(state, config=config, model=model), timeout=timeout
                 )
             else:
                 result = await asyncio.wait_for(
-                    fn(state, model=model), timeout=30.0
+                    fn(state, model=model), timeout=timeout
                 )
             return result
         except asyncio.TimeoutError:
             return {
                 "agent_outputs": {
-                    _agent_name: "⚠️ [Timeout 30s] Agent non disponible — réessayez."
+                    _agent_name: f"⚠️ [Timeout {timeout}s] Agent non disponible — réessayez."
                 },
                 "artifacts": [],
             }
@@ -125,7 +139,7 @@ async def build_graph(db_url: str, models: dict | None = None):
 
     # Nœuds agents
     for name, fn in _AGENT_MAP.items():
-        builder.add_node(name, _make_node(fn, _models.get(name)))
+        builder.add_node(name, _make_node(fn, _models.get(name), timeout=_AGENT_TIMEOUTS.get(name, _DEFAULT_AGENT_TIMEOUT)))
 
     # Edge conditionnel depuis le superviseur → agents ou END
     builder.add_conditional_edges(

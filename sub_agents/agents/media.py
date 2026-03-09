@@ -67,8 +67,15 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
     ])
-
-    return {"agent_outputs": {"media": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    return {
+        "agent_outputs": {"media": response.content},
+        "agent_metrics": {"media": {
+            "prompt_tokens": _u.get("input_tokens", 0) or 0,
+            "completion_tokens": _u.get("output_tokens", 0) or 0,
+            "model": model or _MODEL,
+        }},
+    }
 
 
 def _extract_youtube_url(text: str) -> str:

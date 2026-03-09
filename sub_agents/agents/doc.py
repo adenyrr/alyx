@@ -105,6 +105,8 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         config={"max_tokens": 30},
     )
     keywords = kw_resp.content.strip().replace("\n", " ")[:120]
+    _prompt_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
+    _completion_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
 
     context_parts: list[str] = []
 
@@ -146,8 +148,17 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
     ])
-
-    return {"agent_outputs": {"doc": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    _prompt_tokens += _u.get("input_tokens", 0) or 0
+    _completion_tokens += _u.get("output_tokens", 0) or 0
+    return {
+        "agent_outputs": {"doc": response.content},
+        "agent_metrics": {"doc": {
+            "prompt_tokens": _prompt_tokens,
+            "completion_tokens": _completion_tokens,
+            "model": model or _MODEL,
+        }},
+    }
 
 
 def _extract_dois(papers_data) -> list[str]:

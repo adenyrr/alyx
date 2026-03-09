@@ -42,8 +42,17 @@ class AlyxState(TypedDict):
     # Liste des agents sélectionnés par le superviseur pour ce tour
     routing: list[str]
 
+    # Agents phase 2 (workflows séquentiels) — évalués par stage_gate après la phase 1
+    routing_next: list[str]
+
+    # Copie de routing initiale, pour savoir quand tous les agents phase 1 ont terminé
+    routing_phase1: list[str]
+
     # Sorties brutes de chaque agent invoqué — merge reducer pour le fan-out parallèle
     agent_outputs: Annotated[dict[str, str], _merge_dicts]
+
+    # Métriques de tokens par agent — merge reducer (clé spéciale "_synthesis" pour Alyx)
+    agent_metrics: Annotated[dict[str, dict], _merge_dicts]
 
     # Artifacts générés (blocs html/js/py, images url…) — concat reducer
     artifacts: Annotated[list[dict[str, Any]], _concat_lists]

@@ -1,7 +1,7 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.4.0
+version: 0.5.0
 requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, openai>=1.0, pydantic>=2.0
 """
 
@@ -20,11 +20,15 @@ Flux d'un message :
 """
 
 import asyncio
+import importlib
+import inspect
 import logging
 import os
 import queue
+import re
 import sys
 import threading
+import time
 from datetime import datetime
 from typing import Generator
 
@@ -57,15 +61,64 @@ _AGENT_ICONS = {
     "media":     "🎬 Média",
     "data":      "📊 Données",
     "memory":    "🧠 Mémoire",
-    "image_gen": "🎨 ImageGen",
+    "image_gen": "🎨 Illustration",
     "rag":       "📚 Documents",
     "geo":       "🗺️ Géographie",
+    "reasoning": "🧩 Raisonnement",
+}
+
+# Noms courts des modèles pour la signature
+_MODEL_SHORT_NAMES: dict[str, str] = {
+    "openrouter/qwen3.5-flash": "Qwen-flash",
+    "openrouter/deepseek":      "DeepSeek",
+    "openrouter/kimi-k2.5":     "Kimi",
+    "openrouter/gpt-oss":       "GPT-oss",
+    "pollinations.ai":          "Pollinations",
+}
+
+# Noms courts des agents pour la signature
+_AGENT_SHORT_NAMES: dict[str, str] = {
+    "wikipedia":  "Wikipédia",
+    "web":        "Recherche",
+    "doc":        "Documentaliste",
+    "dev":        "Dev",
+    "media":      "Média",
+    "data":       "Données",
+    "memory":     "Mémoire",
+    "image_gen":  "Illustration",
+    "rag":        "Documents",
+    "geo":        "Géographie",
+    "reasoning":  "Raisonnement",
+}
+
+# Prix modèles en $/1M tokens {input, output}
+_MODEL_PRICING: dict[str, dict[str, float]] = {
+    "openrouter/qwen3.5-flash": {"input": 0.15,  "output": 0.60},
+    "openrouter/deepseek":      {"input": 0.27,  "output": 1.10},
+    "openrouter/kimi-k2.5":     {"input": 1.00,  "output": 3.00},
+    "openrouter/gpt-oss":       {"input": 0.15,  "output": 0.60},
 }
 
 _LOGGER = logging.getLogger(__name__)
 
 # Sentinel signalant la fin du stream dans le queue bridge
 _DONE = object()
+
+# Modules d'agents pour l'exécution directe des workflows séquentiels (phase 2)
+# N'importe pas les modules ici — importlib.import_module est utilisé à l'exécution
+# pour profiter du rechargement dynamique de _ensure_graph.
+_AGENT_MODULES: dict[str, str] = {
+    "wikipedia": "agents.wikipedia",
+    "web":       "agents.web",
+    "doc":       "agents.doc",
+    "geo":       "agents.geo",
+    "dev":       "agents.dev",
+    "media":     "agents.media",
+    "data":      "agents.data",
+    "image_gen": "agents.image_gen",
+    "rag":       "agents.rag_agent",
+    "reasoning": "agents.reasoning",
+}
 
 _ALYX_SYSTEM_TEMPLATE = """\
 Tu es Alyx, une intelligence artificielle conversationnelle multi-agents développé·e par adenyrr.
@@ -75,9 +128,12 @@ Tu t'exprimes EXCLUSIVEMENT en {language}, quelle que soit la langue de l'utilis
 Date du jour : {current_date}
 
 ═══════════════ COMPORTEMENT ════════════════
-Tu utilises TOUJOURS des balises <think>…</think> pour raisonner AVANT de répondre.
-Dans ces balises, inclus uniquement ton analyse de la demande et ton plan de synthèse.
-Ne copie PAS les résultats des agents dans ton <think> — synthétise-les directement.
+Utilise les balises <think>…</think> UNIQUEMENT si :
+  - Des résultats d’agents te sont fournis ci-dessous, OU
+  - La question est complexe (raisonnement multi-étapes, analyse, comparaison).
+Pour les échanges simples (salutations, questions courtes, conversations), réponds
+DIRECTEMENT sans balise <think>.
+Dans <think>, inclus uniquement ton plan de synthèse, pas de copie des résultats agents.
 La réponse finale arrive APRÈS la fermeture </think>, hors des balises.
 
 RÈGLE ABSOLUE — Réponses directes et complètes :
@@ -167,7 +223,8 @@ class Pipeline:
         # --- Comportement ---
         stream_agent_status: bool = Field(default=True, description="Streamer une ligne de statut avant la réponse (agents invoqués)")
         show_model_footer: bool = Field(default=True, description="Afficher un pied de page (modèle + agents) en fin de réponse")
-        show_reasoning: bool = Field(default=True, description="Afficher le raisonnement interne (balises <think> ou champ reasoning_content)")
+        show_reasoning: bool = Field(default=False, description="Afficher le raisonnement interne (champ reasoning_content)")
+        show_perf_stats: bool = Field(default=False, description="Afficher les métriques de performance dans la signature (⏱ temps, tokens, coût estimé)")
         realtime_status: bool = Field(default=True, description="Émettre des statuts OpenWebUI en temps réel (quel agent travaille)")
         enable_memory_bg: bool = Field(default=True, description="Activer la condensation mémoire en arrière-plan")
 
@@ -184,6 +241,7 @@ class Pipeline:
         model_geo: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Géographie (météo OpenMeteo, OSM)")
         model_memory: str = Field(default="openrouter/gpt-oss", description="Modèle agent Mémoire (knowledge graph)")
         model_rag: str = Field(default="openrouter/gpt-oss", description="Modèle agent Documents (RAG Qdrant)")
+        model_reasoning: str = Field(default="openrouter/deepseek", description="Modèle agent Raisonnement (sequential-thinking, analyses complexes)")
 
         # --- Génération d'images (Pollinations.ai — appel direct GET, sans passer par LiteLLM) ---
         enable_image_gen: bool = Field(default=True, description="Activer la génération d'images via Pollinations.ai")
@@ -254,6 +312,7 @@ class Pipeline:
             "memory":     self.valves.model_memory,
             "image_gen":  "pollinations.ai",
             "rag":        self.valves.model_rag,
+            "reasoning":  self.valves.model_reasoning,
             # Paramètres Pollinations transmis aux agents via le dict models
             "_pollinations": {
                 "enable":  self.valves.enable_image_gen,
@@ -310,7 +369,10 @@ class Pipeline:
             "images_b64": images_b64,
             "current_date": current_date,
             "routing": [],
+            "routing_next": [],
+            "routing_phase1": [],
             "agent_outputs": {},
+            "agent_metrics": {},
             "artifacts": [],
             "_pollinations": {
                 "enable":  self.valves.enable_image_gen,
@@ -362,23 +424,48 @@ class Pipeline:
         """Coroutine unique : graphe → synthèse → tokens dans la queue."""
         from openai import AsyncOpenAI  # lazy
 
-        async def _emit(description: str, done: bool = False) -> None:
+        async def _emit(description: str, done: bool = False, hidden: bool = False) -> None:
             if event_emitter and self.valves.realtime_status:
                 try:
-                    await event_emitter({"type": "status", "data": {"description": description, "done": done}})
+                    data: dict = {"description": description, "done": done}
+                    if hidden:
+                        data["hidden"] = True
+                    await event_emitter({"type": "status", "data": data})
                 except Exception:
                     pass
 
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
+        agent_metrics: dict[str, dict] = {}
+        t0 = time.perf_counter()
+        extra_body: dict = {} if self.valves.show_reasoning else {"enable_thinking": False}
         try:
             # Exécuter le graphe
-            agent_outputs, artifacts = await self._run_graph(
+            agent_outputs, artifacts, agent_metrics = await self._run_graph(
                 graph, initial_state, config, event_emitter, models=models
             )
 
+            # ── FAST PATH image_gen seul ────────────────────────────────────────
+            # Pas de synthèse LLM : on émet directement l'image Markdown.
+            # Gain ~2-3 s par rapport au chemin de synthèse complet.
+            if (
+                set(agent_outputs.keys()) == {"image_gen"}
+                and not agent_outputs.get("image_gen", "").startswith("⚠️")
+            ):
+                if event_emitter and len(messages) <= 2:
+                    asyncio.ensure_future(_emit_chat_title(event_emitter, user_message))
+                q.put(agent_outputs["image_gen"])
+                elapsed = time.perf_counter() - t0
+                await _emit("✅ Terminé", done=True, hidden=True)
+                if self.valves.show_model_footer:
+                    q.put(f"\n\n---\n*{_build_footer(self.valves.alyx_model, agent_outputs, models, agent_metrics, elapsed, self.valves.show_perf_stats)}*")
+                return
+
             # Court-circuit : aucun agent invoqué → Alyx répond directement
             if not agent_outputs and not artifacts:
+                # Titre automatique du chat à la première réponse
+                if event_emitter and len(messages) <= 2:
+                    asyncio.ensure_future(_emit_chat_title(event_emitter, user_message))
                 await _emit("✍️ Réponse directe…")
                 alyx_system = _ALYX_SYSTEM_TEMPLATE.format(
                     current_date=datetime.now().strftime("%A %d %B %Y"),
@@ -398,20 +485,55 @@ class Pipeline:
                     else:
                         direct_messages.append({"role": r, "content": c if isinstance(c, str) else ""})
                 client = AsyncOpenAI(base_url=self.valves.litellm_url, api_key=self.valves.litellm_api_key)
+                direct_usage_out: list = []
                 stream = await client.chat.completions.create(
                     model=self.valves.alyx_model,
                     messages=direct_messages,
                     temperature=self.valves.alyx_temperature,
                     stream=True,
+                    stream_options={"include_usage": True},
+                    extra_body=extra_body,
                 )
-                async for token in self._astream_response(stream, self.valves.show_reasoning):
+                async for token in self._astream_response(stream, self.valves.show_reasoning, usage_out=direct_usage_out):
                     q.put(token)
-                await _emit("", done=True)
+                elapsed = time.perf_counter() - t0
+                if direct_usage_out:
+                    u = direct_usage_out[0]
+                    agent_metrics["_synthesis"] = {
+                        "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+                        "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+                        "model": self.valves.alyx_model,
+                    }
+                await _emit("✅ Terminé", done=True, hidden=True)
                 if self.valves.show_model_footer:
-                    q.put(f"\n\n---\n*🤖 Alyx `{self.valves.alyx_model}`*")
+                    footer = _build_footer(
+                        alyx_model=self.valves.alyx_model,
+                        agent_outputs={},
+                        models=models,
+                        agent_metrics=agent_metrics,
+                        elapsed=elapsed,
+                        show_perf_stats=self.valves.show_perf_stats,
+                    )
+                    q.put(f"\n\n---\n*{footer}*")
                 return
 
             # Synthèse finale
+            # Émettre les citations source (OpenWebUI cartes persistantes)
+            if event_emitter:
+                for citation in _extract_citations(agent_outputs):
+                    try:
+                        await event_emitter({"type": "source", "data": {
+                            "document": [citation["snippet"]],
+                            "metadata": [{"source": citation["url"]}],
+                            "source": {"name": citation["title"], "url": citation["url"]},
+                        }})
+                    except Exception:
+                        pass
+
+            # Titre automatique du chat à la première réponse (avec agents)
+            if event_emitter and len(messages) <= 2:
+                asyncio.ensure_future(_emit_chat_title(event_emitter, user_message))
+
             await _emit("✍️ Rédaction de la réponse…")
             synthesis_context = _build_synthesis_context(agent_outputs, artifacts)
             synth_messages = [{"role": "system", "content": _ALYX_SYSTEM_TEMPLATE.format(
@@ -438,25 +560,38 @@ class Pipeline:
                 synth_messages.append({"role": "user", "content": agent_context_msg})
 
             client = AsyncOpenAI(base_url=self.valves.litellm_url, api_key=self.valves.litellm_api_key)
+            synth_usage_out: list = []
             stream = await client.chat.completions.create(
                 model=self.valves.alyx_model,
                 messages=synth_messages,
                 temperature=self.valves.alyx_temperature,
                 stream=True,
+                stream_options={"include_usage": True},
+                extra_body=extra_body,
             )
-            async for token in self._astream_response(stream, self.valves.show_reasoning):
+            async for token in self._astream_response(stream, self.valves.show_reasoning, usage_out=synth_usage_out):
                 q.put(token)
-            await _emit("", done=True)
+            elapsed = time.perf_counter() - t0
+            if synth_usage_out:
+                u = synth_usage_out[0]
+                agent_metrics["_synthesis"] = {
+                    "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+                    "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+                    "model": self.valves.alyx_model,
+                }
+            await _emit("✅ Terminé", done=True, hidden=True)
 
             # Pied de page
             if self.valves.show_model_footer:
-                agent_icons = [
-                    _AGENT_ICONS.get(name, name)
-                    for name in agent_outputs
-                    if agent_outputs[name] and agent_outputs[name].strip()
-                ]
-                parts = [f"🤖 Alyx `{self.valves.alyx_model}`"] + agent_icons
-                q.put("\n\n---\n*" + "  ·  ".join(parts) + "*")
+                footer = _build_footer(
+                    alyx_model=self.valves.alyx_model,
+                    agent_outputs=agent_outputs,
+                    models=models,
+                    agent_metrics=agent_metrics,
+                    elapsed=elapsed,
+                    show_perf_stats=self.valves.show_perf_stats,
+                )
+                q.put(f"\n\n---\n*{footer}*")
 
         except Exception as exc:
             await _emit("Erreur lors de l'exécution", done=True)
@@ -550,13 +685,15 @@ class Pipeline:
                 yield flushed
 
     @staticmethod
-    async def _astream_response(stream, show_reasoning: bool):
+    async def _astream_response(stream, show_reasoning: bool, usage_out: list | None = None):
         """
         Stream OpenAI async.
-        - Balises <think>…</think> passées TELLES QUELLES dans le stream
-          (rendu natif OpenWebUI — affiche le raisonnement en temps réel).
-        - Champ reasoning_content (delta, modèles o-series) : converti en blockquote
+        - Champ reasoning_content (modèles o-series, DeepSeek) : converti en blockquote
           si show_reasoning=True, supprimé sinon.
+        - Balises <think>…</think> dans le contenu : passées telles quelles si
+          show_reasoning=True, filtrées silencieusement sinon (fallback si
+          enable_thinking=False n'est pas honoré par le modèle).
+        - usage_out : si fourni, reçoit le dernier objet usage (stream_options include_usage).
         """
         reasoning_parts: list[str] = []
 
@@ -573,7 +710,15 @@ class Pipeline:
 
         buf = ""
         in_think = False
+        think_buf = ""  # accumule les tokens à l'intérieur de <think>…</think>
         async for chunk in stream:
+            # Capturer les données d'usage du dernier chunk (stream_options include_usage)
+            if usage_out is not None and getattr(chunk, "usage", None):
+                usage_out.clear()
+                usage_out.append(chunk.usage)
+
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
 
             rc = getattr(delta, "reasoning_content", None)
@@ -593,19 +738,29 @@ class Pipeline:
                 if in_think:
                     end = buf.find("</think>")
                     if end >= 0:
-                        out += buf[:end] + "</think>"
+                        inner = buf[:end]
                         buf = buf[end + len("</think>"):]
                         in_think = False
+                        if show_reasoning:
+                            # Passer le bloc complet tel quel
+                            out += think_buf + inner + "</think>"
+                        think_buf = ""
                         reasoning_parts.clear()
                     else:
-                        out += buf
+                        if show_reasoning:
+                            out += buf
+                        else:
+                            think_buf += buf  # avaler sans émettre
                         buf = ""
                 else:
                     start = buf.find("<think>")
                     if start >= 0:
-                        out += buf[:start] + "<think>"
+                        out += buf[:start]
                         buf = buf[start + len("<think>"):]
                         in_think = True
+                        if show_reasoning:
+                            out += "<think>"
+                        think_buf = ""
                     else:
                         out += buf
                         buf = ""
@@ -623,7 +778,9 @@ class Pipeline:
     async def _run_graph(graph, initial_state: dict, config: dict, event_emitter=None, models: dict | None = None):
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
+        agent_metrics: dict[str, dict] = {}
         pending: set[str] = set()
+        routing_next: list[str] = []
 
         async def _emit(description: str, done: bool = False) -> None:
             if event_emitter:
@@ -632,34 +789,85 @@ class Pipeline:
                 except Exception:
                     pass
 
+        async def _handle_agent_output(node_name: str, node_output: dict) -> None:
+            """Met à jour agent_outputs/artifacts/metrics et émet notifications d'erreur."""
+            icon = _AGENT_ICONS.get(node_name, node_name)
+            model_name = (models or {}).get(node_name, "?")
+            pending.discard(node_name)
+            if pending:
+                remaining_labels = "  ·  ".join(_AGENT_ICONS.get(a, a) for a in pending)
+                await _emit(f"✅ {icon} — en cours : {remaining_labels}")
+            else:
+                await _emit(f"✅ {icon} ({model_name})")
+
+            agent_outputs.update(node_output.get("agent_outputs", {}))
+            artifacts.extend(node_output.get("artifacts", []))
+            agent_metrics.update(node_output.get("agent_metrics", {}))
+
+            if event_emitter:
+                for _n, out_text in node_output.get("agent_outputs", {}).items():
+                    if isinstance(out_text, str) and out_text.startswith(("⚠️", "⏱️")):
+                        try:
+                            await event_emitter({"type": "notification", "data": {
+                                "type": "warning",
+                                "content": f"{icon} : {out_text[:120]}",
+                            }})
+                        except Exception:
+                            pass
+
+        # ── Phase 1 : exécution du graphe LangGraph ────────────────────────────
         async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
             for node_name, node_output in event.items():
                 if node_name == "supervisor":
                     routing = node_output.get("routing", [])
+                    routing_next = node_output.get("routing_next", [])
                     if routing:
                         pending = set(routing)
                         labels = "  ·  ".join(_AGENT_ICONS.get(a, a) for a in routing)
                         await _emit(f"Invocation des agents : {labels}")
                     continue
+                await _handle_agent_output(node_name, node_output)
 
-                icon = _AGENT_ICONS.get(node_name, node_name)
-                model_name = (models or {}).get(node_name, "?")
-                pending.discard(node_name)
-                if pending:
-                    remaining_labels = "  ·  ".join(_AGENT_ICONS.get(a, a) for a in pending)
-                    await _emit(f"✅ {icon} — en cours : {remaining_labels}")
+        # ── Phase 2 : workflow séquentiel (si routing_next défini) ─────────────
+        # Les agents phase 2 reçoivent agent_outputs de la phase 1 dans leur état.
+        valid_next = [n for n in routing_next if n in _AGENT_MODULES]
+        if valid_next:
+            labels2 = "  ·  ".join(_AGENT_ICONS.get(n, n) for n in valid_next)
+            await _emit(f"Phase 2 — {labels2}")
+            pending = set(valid_next)
+
+            # Construire l'état phase 2 avec le contexte phase 1 inclus
+            phase2_state = {
+                **initial_state,
+                "agent_outputs": dict(agent_outputs),
+                "artifacts": list(artifacts),
+                "routing": valid_next,
+                "routing_next": [],
+                "routing_phase1": [],
+            }
+
+            coros = []
+            for name in valid_next:
+                mod = importlib.import_module(_AGENT_MODULES[name])
+                has_config = "config" in inspect.signature(mod.run).parameters
+                m = (models or {}).get(name)
+                if has_config:
+                    coros.append((name, mod.run(phase2_state, config=config, model=m)))
                 else:
-                    await _emit(f"✅ {icon} ({model_name})")
+                    coros.append((name, mod.run(phase2_state, model=m)))
 
-                agent_outputs.update(node_output.get("agent_outputs", {}))
-                artifacts.extend(node_output.get("artifacts", []))
+            results = await asyncio.gather(*[c for _, c in coros], return_exceptions=True)
+            for (name, _), result in zip(coros, results):
+                if isinstance(result, dict):
+                    await _handle_agent_output(name, result)
+                else:
+                    agent_outputs[name] = f"⚠️ [Erreur phase 2] {result}"
 
-        return agent_outputs, artifacts
+        return agent_outputs, artifacts, agent_metrics
 
 
 def _strip_think_tags(text: str) -> str:
     """Supprime les blocs <think>…</think> des sorties d'agents (ex: deepseek)."""
-    import re
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
@@ -674,3 +882,147 @@ def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict
         if artifact.get("type") == "image" and artifact.get("url"):
             parts.append(f"## Image générée\n![Image]({artifact['url']})")
     return "\n\n".join(parts)
+
+
+def _extract_citations(agent_outputs: dict[str, str]) -> list[dict]:
+    """
+    Extrait les URLs depuis les sorties des agents web, doc et wikipedia.
+    Retourne une liste de {url, title, snippet}, dédupliquée, max 10.
+    """
+    _url_pattern = re.compile(r"\[([^\]]{1,120})\]\((https?://[^\)]+)\)")
+    _bare_url_pattern = re.compile(r"(?<!\()(https?://[^\s\]\)\"',]{10,})")
+    seen: set[str] = set()
+    results: list[dict] = []
+
+    # Agents qui produisent des sources utiles
+    for name in ("web", "wikipedia", "doc", "rag", "geo", "media"):
+        text = agent_outputs.get(name, "") or ""
+        if not text:
+            continue
+
+        # Liens markdown [titre](url)
+        for title, url in _url_pattern.findall(text):
+            url = url.rstrip(")")
+            if url not in seen:
+                seen.add(url)
+                # snippet = phrase autour du lien (heuristique)
+                idx = text.find(url)
+                start = max(0, idx - 80)
+                snippet = text[start:idx + len(url) + 80].strip()
+                results.append({"url": url, "title": title[:100], "snippet": snippet[:300]})
+                if len(results) >= 10:
+                    return results
+
+        # URLs brutes (fallback)
+        for url in _bare_url_pattern.findall(text):
+            url = url.rstrip(".,;:)")
+            if url not in seen:
+                seen.add(url)
+                results.append({"url": url, "title": url[:100], "snippet": ""})
+                if len(results) >= 10:
+                    return results
+
+    return results
+
+
+async def _emit_chat_title(event_emitter, user_message: str) -> None:
+    """Génère et émet un titre court pour le chat (premier tour uniquement)."""
+    from openai import AsyncOpenAI
+    try:
+        client = AsyncOpenAI(
+            base_url=os.environ.get("LITELLM_URL", "http://litellm:4000/v1"),
+            api_key=os.environ.get("LITELLM_API_KEY", ""),
+        )
+        resp = await client.chat.completions.create(
+            model="openrouter/qwen3.5-flash",
+            messages=[
+                {"role": "system", "content": "Generate a concise chat title (5 words max, in the same language as the message). Return ONLY the title, no quotes, no punctuation at end."},
+                {"role": "user", "content": user_message[:300]},
+            ],
+            max_tokens=16,
+            stream=False,
+            extra_body={"enable_thinking": False},
+        )
+        title = resp.choices[0].message.content.strip().strip('"\'')[:60]
+        if title:
+            await event_emitter({"type": "chat:title", "data": {"title": title}})
+    except Exception:
+        pass  # Non-bloquant — le titre n'est pas critique
+
+
+def _estimate_cost(agent_metrics: dict[str, dict]) -> float:
+    """Retourne le coût estimé en USD pour l'ensemble des appels LLM du tour."""
+    total = 0.0
+    for m in agent_metrics.values():
+        model = m.get("model", "")
+        pricing = _MODEL_PRICING.get(model, {})
+        if pricing:
+            inp = m.get("prompt_tokens", 0) or 0
+            out = m.get("completion_tokens", 0) or 0
+            total += (inp * pricing["input"] + out * pricing["output"]) / 1_000_000
+    return total
+
+
+def _build_footer(
+    alyx_model: str,
+    agent_outputs: dict,
+    models: dict | None = None,
+    agent_metrics: dict | None = None,
+    elapsed: float | None = None,
+    show_perf_stats: bool = False,
+) -> str:
+    """
+    Construit la signature Alyx.
+    Exemples :
+      "Alyx (Qwen-flash)"
+      "Alyx (Qwen-flash) avec Recherche (Qwen-flash) et Dev (Kimi)"
+      "Alyx (Qwen-flash) avec Recherche, Wikipédia et Dev  ·  ⏱ 4.2s  ·  ~1.2k tok  ·  ~$0.001"
+    """
+    alyx_short = _MODEL_SHORT_NAMES.get(alyx_model, alyx_model.split("/")[-1])
+    base = f"Alyx ({alyx_short})"
+
+    active_agents = [
+        name for name in agent_outputs
+        if agent_outputs.get(name, "").strip()
+    ]
+
+    if not active_agents:
+        footer = base
+    else:
+        agent_parts: list[str] = []
+        for name in active_agents:
+            label = _AGENT_SHORT_NAMES.get(name, name)
+            agent_model = (models or {}).get(name, "")
+            short_model = _MODEL_SHORT_NAMES.get(agent_model, "")
+            if short_model and short_model != alyx_short:  # n'afficher le modèle que s'il est différent d'Alyx
+                agent_parts.append(f"{label} ({short_model})")
+            else:
+                agent_parts.append(label)
+
+        if len(agent_parts) == 1:
+            footer = f"{base} avec {agent_parts[0]}"
+        elif len(agent_parts) == 2:
+            footer = f"{base} avec {agent_parts[0]} et {agent_parts[1]}"
+        else:
+            footer = f"{base} avec {', '.join(agent_parts[:-1])} et {agent_parts[-1]}"
+
+    if show_perf_stats and agent_metrics:
+        total_in = sum(m.get("prompt_tokens", 0) or 0 for m in agent_metrics.values())
+        total_out = sum(m.get("completion_tokens", 0) or 0 for m in agent_metrics.values())
+        total_tok = total_in + total_out
+        cost = _estimate_cost(agent_metrics)
+
+        perf_parts: list[str] = []
+        if elapsed is not None:
+            perf_parts.append(f"⏱ {elapsed:.1f}s")
+        if total_tok > 0:
+            if total_tok >= 1000:
+                perf_parts.append(f"~{total_tok / 1000:.1f}k tok")
+            else:
+                perf_parts.append(f"~{total_tok} tok")
+        if cost > 0.0:
+            perf_parts.append(f"~${cost:.4f}")
+        if perf_parts:
+            footer += "  ·  " + "  ·  ".join(perf_parts)
+
+    return footer

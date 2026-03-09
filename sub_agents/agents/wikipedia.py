@@ -64,6 +64,8 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         config={"max_tokens": 20},
     )
     keywords = kw_resp.content.strip().replace("\n", " ")[:100]
+    _prompt_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
+    _completion_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
 
     # 2. Recherche Wikipedia via MCPO
     wiki_raw = ""
@@ -83,8 +85,17 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
     ])
-
-    return {"agent_outputs": {"wikipedia": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    _prompt_tokens += _u.get("input_tokens", 0) or 0
+    _completion_tokens += _u.get("output_tokens", 0) or 0
+    return {
+        "agent_outputs": {"wikipedia": response.content},
+        "agent_metrics": {"wikipedia": {
+            "prompt_tokens": _prompt_tokens,
+            "completion_tokens": _completion_tokens,
+            "model": model or _MODEL,
+        }},
+    }
 
 
 def _last_user_message(messages: list) -> str:

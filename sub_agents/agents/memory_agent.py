@@ -73,8 +73,15 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         SystemMessage(content=_SYSTEM_RECALL),
         HumanMessage(content=f"Knowledge graph results:\n{recall_result}\n\nUser question: {user_text}"),
     ])
-
-    return {"agent_outputs": {"memory": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    return {
+        "agent_outputs": {"memory": response.content},
+        "agent_metrics": {"memory": {
+            "prompt_tokens": _u.get("input_tokens", 0) or 0,
+            "completion_tokens": _u.get("output_tokens", 0) or 0,
+            "model": model or _MODEL,
+        }},
+    }
 
 
 async def run_bg(state: "AlyxState", model: str | None = None) -> None:

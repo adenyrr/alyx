@@ -223,6 +223,21 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
 
     context_parts: list[str] = []
 
+    # 0. Résultats phase 1 (workflow séquentiel) — données récupérées par web/geo/data/etc.
+    prior_outputs = {
+        k: v for k, v in (state.get("agent_outputs") or {}).items()
+        if v and not str(v).startswith("⚠️")
+    }
+    if prior_outputs:
+        prior_text = "\n\n".join(
+            f"### {name} agent results\n{content[:3000]}"
+            for name, content in prior_outputs.items()
+        )
+        context_parts.append(
+            "## Data retrieved by previous agents (USE THIS as your primary data source)\n"
+            + prior_text
+        )
+
     # 1. Skills locaux pertinents
     await _emit("📚 Recherche dans les skills…")
     skill_hits = _find_relevant_skills(user_text)
@@ -279,5 +294,12 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
     ])
-
-    return {"agent_outputs": {"dev": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    return {
+        "agent_outputs": {"dev": response.content},
+        "agent_metrics": {"dev": {
+            "prompt_tokens": _u.get("input_tokens", 0) or 0,
+            "completion_tokens": _u.get("output_tokens", 0) or 0,
+            "model": model or _MODEL,
+        }},
+    }

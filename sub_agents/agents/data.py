@@ -101,8 +101,15 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
     ])
-
-    return {"agent_outputs": {"data": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    return {
+        "agent_outputs": {"data": response.content},
+        "agent_metrics": {"data": {
+            "prompt_tokens": _u.get("input_tokens", 0) or 0,
+            "completion_tokens": _u.get("output_tokens", 0) or 0,
+            "model": model or _MODEL,
+        }},
+    }
 
 
 def _extract_math_expression(text: str) -> str:

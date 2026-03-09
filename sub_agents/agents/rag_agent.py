@@ -66,8 +66,15 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=f"## Document excerpts\n{rag_context}\n\nUser question: {user_text}"),
     ])
-
-    return {"agent_outputs": {"rag": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    return {
+        "agent_outputs": {"rag": response.content},
+        "agent_metrics": {"rag": {
+            "prompt_tokens": _u.get("input_tokens", 0) or 0,
+            "completion_tokens": _u.get("output_tokens", 0) or 0,
+            "model": model or _MODEL,
+        }},
+    }
 
 
 def _last_user_message(messages: list) -> str:

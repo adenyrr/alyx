@@ -1,5 +1,4 @@
 """
-Supervisor Node — classification de l'intent utilisateur.
 
 Utilise Qwen3.5-Flash pour analyser le dernier message et retourner
 la liste des agents à invoquer pour ce tour. Répond en JSON pur.
@@ -36,7 +35,7 @@ _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 
 _VALID_AGENTS = {
     "wikipedia", "web", "doc", "dev", "media",
-    "data", "geo", "memory", "image_gen", "rag",
+    "data", "geo", "memory", "image_gen", "rag", "reasoning",
 }
 
 _SYSTEM = """\
@@ -58,6 +57,9 @@ Given the user's last message, output ONLY a JSON array of agent names to invoke
   "memory"    → user's personal preferences, past conversation context, stored facts about user
   "image_gen" → generate/draw/create an image, illustration, logo, or visual from description
   "rag"       → questions about uploaded documents in the current conversation
+  "reasoning" → COMPLEX analytical decomposition: multi-variable risk analysis, strategic planning,
+                  pros/cons comparison, differential diagnosis, multi-step logical reasoning,
+                  decision frameworks. NOT for factual questions, NOT for code, NOT for images.
 
 ═══════════════════════════════════════════════════════
  ROUTING RULES
@@ -96,6 +98,33 @@ RULE 8 — DEV + WEB:
   On the NEXT turn, "dev" alone can build the artifact from conversation data.
   Only combine ["dev", "wikipedia", "web"] when tasks are truly independent.
 
+RULE 9 — REASONING:
+  Use "reasoning" ONLY for genuinely complex analytical questions requiring structured
+  decomposition: pros/cons with multiple dimensions, strategic planning with constraints,
+  risk matrices, differential diagnosis. NOT for factual lookups (use web+wiki instead).
+  "reasoning" can combine with "doc" for academic evidence-backed analysis: ["reasoning", "doc"].
+  NEVER combine "reasoning" with "image_gen", "geo", or "data".
+
+RULE 10 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
+  When task B genuinely CANNOT run without task A's output, use JSON object format:
+    {"routing": ["<phase1_agents>"], "routing_next": ["<phase2_agents>"]}
+  Phase 1 runs fully first, THEN phase 2 receives phase 1's results as context.
+  Use sequential ONLY when execution order matters. For independent tasks → parallel (flat array).
+  NEVER put the same agent in both routing and routing_next.
+  routing_next supports max 1-2 agents (usually just "dev" to build from fetched data).
+  Sequential examples:
+    "Find population of 5 biggest cities and make a bar chart"
+      → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+    "Recherche les données économiques de l'UE et crée une visualisation"
+      → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+    "Get current stock prices for Tesla, Apple, NVIDIA and chart them"
+      → {"routing": ["data"], "routing_next": ["dev"]}
+    "Recherche la météo de Paris aujourd'hui et affiche-la joliment"
+      → {"routing": ["geo"], "routing_next": ["dev"]}
+  Parallel (use flat array!) when tasks are independent:
+    "Write a Python script that calculates fibonacci" → ["dev"]
+    "What's the weather AND show me a graph of last week's temps" → NOT sequential (dev can't access weather data independently)
+
 ═══════════════════════════════════════════════════════
  EXAMPLES
 ═══════════════════════════════════════════════════════
@@ -122,8 +151,16 @@ RULE 8 — DEV + WEB:
   "[image jointe + question factuelle] Qui a peint ça ?" → ["wikipedia", "web"]
   "Cours de l'action Apple en ce moment" → ["data"]
   "Carte de la région Bretagne" → ["geo"]
+  "Analyse les risques d'un LBO" → ["reasoning"]
+  "Quels sont les avantages et inconvénients de chaque approche d'IA ?" → ["reasoning"]
+  "Plan stratégique pour une startup SaaS B2B" → ["reasoning"]
+  "Analyse médicale approfondie des traitements anti-TNF" → ["reasoning", "doc"]
   "Donne-moi la population de Tokyo" → ["wikipedia", "web"]
   "Recherche les études sur le microbiome intestinal" → ["doc"]
+  "Find the GDP of the top 10 countries and create an interactive bar chart" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+  "Recherche les coordonnées GPS de Paris, Lyon, Marseille et affiche les sur une carte Leaflet" → {"routing": ["geo"], "routing_next": ["dev"]}
+  "Get the latest stock price of LVMH and Tesla, and build a comparison chart" → {"routing": ["data"], "routing_next": ["dev"]}
+  "Trouve les 5 volcans les plus actifs et leurs coordonnées, puis affiche-les sur une carte" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
 """
 
 
@@ -156,13 +193,38 @@ async def route(state: "AlyxState", model: str | None = None) -> "AlyxState":
             HumanMessage(content=routing_prompt),
         ])
         raw = response.content.strip()
-        match = re.search(r"\[.*?\]", raw, re.DOTALL)
-        if match:
-            agents = json.loads(match.group(0))
+
+        agents: list[str] = []
+        routing_next: list[str] = []
+
+        # Nouveau format séquentiel : {"routing": [...], "routing_next": [...]}
+        obj_match = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+        if obj_match:
+            try:
+                parsed = json.loads(obj_match.group(0))
+                agents = parsed.get("routing", [])
+                routing_next = parsed.get("routing_next", [])
+            except Exception:
+                agents = []
+                routing_next = []
         else:
-            agents = []
+            # Format classique : tableau JSON plat [...]
+            arr_match = re.search(r"\[.*?\]", raw, re.DOTALL)
+            if arr_match:
+                agents = json.loads(arr_match.group(0))
+
         agents = [a for a in agents if a in _VALID_AGENTS][:3]
+        routing_next = [a for a in routing_next if a in _VALID_AGENTS and a not in agents][:2]
     except Exception:
         agents = []
+        routing_next = []
 
-    return {**state, "routing": agents, "agent_outputs": {}, "artifacts": []}
+    return {
+        **state,
+        "routing": agents,
+        "routing_next": routing_next,
+        "routing_phase1": list(agents),
+        "agent_outputs": {},
+        "agent_metrics": {},
+        "artifacts": [],
+    }

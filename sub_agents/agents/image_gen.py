@@ -78,6 +78,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
 
             return {
                 "agent_outputs": {"image_gen": img_md},
+                "agent_metrics": {},
                 "artifacts": [{"type": "image", "url": final_url, "prompt": prompt}],
             }
 

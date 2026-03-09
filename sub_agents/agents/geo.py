@@ -61,6 +61,8 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         config={"max_tokens": 30},
     )
     location = loc_resp.content.strip()[:80]
+    _prompt_tokens = (getattr(loc_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
+    _completion_tokens = (getattr(loc_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
 
     context_parts: list[str] = []
     lat: float | None = None
@@ -113,8 +115,17 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
     ])
-
-    return {"agent_outputs": {"geo": response.content}}
+    _u = getattr(response, "usage_metadata", None) or {}
+    _prompt_tokens += _u.get("input_tokens", 0) or 0
+    _completion_tokens += _u.get("output_tokens", 0) or 0
+    return {
+        "agent_outputs": {"geo": response.content},
+        "agent_metrics": {"geo": {
+            "prompt_tokens": _prompt_tokens,
+            "completion_tokens": _completion_tokens,
+            "model": model or _MODEL,
+        }},
+    }
 
 
 def _last_user_message(messages: list) -> str:
