@@ -225,6 +225,30 @@ def _build_pipeline_event_emitter(
     return _queue_event
 
 
+def _build_pipeline_reasoning_emitter(
+    q: "queue.Queue",
+    model_name: str,
+) -> Callable[[str], Awaitable[None]]:
+    """Émet des chunks OpenAI `reasoning_content` pour un rendu séparé du statut."""
+
+    async def _queue_reasoning(text: str) -> None:
+        if not text:
+            return
+        q.put({
+            "id": f"alyx-reasoning-{time.time_ns()}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "delta": {"reasoning_content": text},
+                "finish_reason": None,
+            }],
+        })
+
+    return _queue_reasoning
+
+
 class Pipeline:
     class Valves(BaseModel):
         # --- Connexion ---
@@ -242,8 +266,8 @@ class Pipeline:
         stream_agent_status: bool = Field(default=True, description="Streamer une ligne de statut avant la réponse (agents invoqués)")
         show_model_footer: bool = Field(default=True, description="Afficher un pied de page (modèle + agents) en fin de réponse")
         show_reasoning: bool = Field(default=False, description="Afficher le raisonnement en temps réel dans l'interface (jamais dans la réponse finale)")
-        show_agent_reasoning: bool = Field(default=True, description="Afficher le raisonnement structuré des agents via les statuts OpenWebUI")
-        show_model_reasoning: bool = Field(default=False, description="Afficher le reasoning_content du modèle de synthèse via les statuts OpenWebUI")
+        show_agent_reasoning: bool = Field(default=True, description="Afficher le raisonnement structuré des agents dans le flux de reasoning OpenWebUI")
+        show_model_reasoning: bool = Field(default=False, description="Afficher le reasoning_content du modèle de synthèse dans le flux de reasoning OpenWebUI")
         show_perf_stats: bool = Field(default=False, description="Afficher les métriques de performance dans la signature (⏱ temps, tokens, coût estimé)")
         realtime_status: bool = Field(default=True, description="Émettre des statuts OpenWebUI en temps réel (quel agent travaille)")
         enable_memory_bg: bool = Field(default=True, description="Activer la condensation mémoire en arrière-plan")
@@ -362,13 +386,18 @@ class Pipeline:
         """
         q: queue.Queue = queue.Queue()
         runtime_event_emitter = _build_pipeline_event_emitter(q, __event_emitter__)
+        runtime_reasoning_emitter = _build_pipeline_reasoning_emitter(q, self.valves.alyx_model)
 
         # Helper : émet un statut OpenWebUI natif depuis le contexte synchrone.
         # En mode pipelines, l'event est injecté dans le flux streamé.
+        async def _emit_status_sync(description: str, done: bool = False) -> None:
+            if runtime_event_emitter:
+                await runtime_event_emitter({"type": "status", "data": {"description": description, "done": done}})
+
         def _emit(description: str, done: bool = False) -> None:
             if runtime_event_emitter and self.valves.realtime_status:
                 asyncio.run_coroutine_threadsafe(
-                    runtime_event_emitter({"type": "status", "data": {"description": description, "done": done}}),
+                    _emit_status_sync(description, done),
                     self._loop,
                 )
 
@@ -385,6 +414,7 @@ class Pipeline:
         config = {"configurable": {
             "thread_id": chat_id,
             "event_emitter": runtime_event_emitter if self.valves.realtime_status else None,
+            "reasoning_emitter": runtime_reasoning_emitter if self.valves.show_reasoning else None,
             "show_reasoning": self.valves.show_reasoning,
             "show_agent_reasoning": self.valves.show_agent_reasoning,
             "show_model_reasoning": self.valves.show_model_reasoning,
@@ -454,11 +484,12 @@ class Pipeline:
                 await _emit_status(event_emitter, description, done=done, hidden=hidden)
 
         model_reasoning_enabled = self.valves.show_reasoning and self.valves.show_model_reasoning
+        reasoning_stream_emitter = (config.get("configurable") or {}).get("reasoning_emitter")
         model_reasoning_buffer = ""
 
         async def _emit_model_reasoning(piece: str = "", final: bool = False) -> None:
             nonlocal model_reasoning_buffer
-            if not (event_emitter and model_reasoning_enabled):
+            if not (reasoning_stream_emitter and model_reasoning_enabled):
                 return
             if piece:
                 model_reasoning_buffer += piece
@@ -470,7 +501,7 @@ class Pipeline:
             chunk = _compact_reasoning_text(model_reasoning_buffer)
             model_reasoning_buffer = ""
             if chunk:
-                await _emit_status(event_emitter, f"💭 {chunk}", done=False, hidden=False)
+                await reasoning_stream_emitter(chunk)
 
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []

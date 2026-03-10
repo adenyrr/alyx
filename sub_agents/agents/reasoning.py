@@ -56,6 +56,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     user_text = _last_user_message(messages)
 
     emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+    reasoning_emitter = (config.get("configurable") or {}).get("reasoning_emitter") if config else None
     show_reasoning = bool((config.get("configurable") or {}).get("show_reasoning")) if config else False
     show_agent_reasoning = bool((config.get("configurable") or {}).get("show_agent_reasoning", True)) if config else True
 
@@ -63,6 +64,13 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         if emitter:
             try:
                 await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
+
+    async def _emit_reasoning(text: str) -> None:
+        if reasoning_emitter and show_reasoning and show_agent_reasoning and text:
+            try:
+                await reasoning_emitter(text)
             except Exception:
                 pass
 
@@ -101,6 +109,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     # 2. Sequential-thinking pour chaque étape
     for i, step in enumerate(steps, 1):
         await _emit(f"🧩 Étape {i}/{len(steps)} · {step[:120]}")
+        await _emit_reasoning(f"[Agent reasoning] Étape {i}/{len(steps)} · {step}\n")
         try:
             result = await call_tool("sequential-thinking", "sequentialthinking", {
                 "thought": step,
@@ -113,7 +122,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             if show_reasoning and show_agent_reasoning:
                 summary = _compact_status_reasoning(result_str)
                 if summary:
-                    await _emit(f"💭 Étape {i}/{len(steps)} · {summary}")
+                    await _emit_reasoning(f"{summary}\n")
         except Exception as exc:
             context_parts.append(f"## Step {i}: {step}\n[Sequential-thinking unavailable: {exc}]")
             await _emit(f"⚠️ Étape {i}/{len(steps)} indisponible")
