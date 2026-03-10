@@ -776,9 +776,6 @@ class Pipeline:
                         out += buf
                         buf = ""
             if out:
-                if reasoning_open and reasoning_handler:
-                    await reasoning_handler("", True)
-                    reasoning_open = False
                 yield out
 
         if buf:
