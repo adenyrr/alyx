@@ -205,6 +205,26 @@ def _extract_images_b64(messages: list[dict]) -> list[str]:
     return images
 
 
+def _build_pipeline_event_emitter(
+    q: "queue.Queue",
+    native_emitter=None,
+) -> Callable[[dict[str, Any]], Awaitable[None]] | None:
+    """
+    Adapte l'émission d'events au runtime réel.
+
+    - En mode fonction native OpenWebUI, on réutilise __event_emitter__.
+    - En mode conteneur open-webui/pipelines, les events doivent être renvoyés
+      dans le flux du pipe sous la forme {"event": {...}}.
+    """
+    if native_emitter:
+        return native_emitter
+
+    async def _queue_event(event: dict[str, Any]) -> None:
+        q.put({"event": event})
+
+    return _queue_event
+
+
 class Pipeline:
     class Valves(BaseModel):
         # --- Connexion ---
@@ -334,18 +354,21 @@ class Pipeline:
         messages: list[dict],
         body: dict,
         __event_emitter__=None,
-    ) -> Generator[str, None, None]:
+    ) -> Generator[Any, None, None]:
         """
         Point d'entrée synchrone (Generator) exigé par le framework Pipelines.
         Toutes les opérations async s'exécutent dans le loop persistant de l'instance
         via run_coroutine_threadsafe, garantissant que les connexions psycopg restent valides.
         """
+        q: queue.Queue = queue.Queue()
+        runtime_event_emitter = _build_pipeline_event_emitter(q, __event_emitter__)
+
         # Helper : émet un statut OpenWebUI natif depuis le contexte synchrone.
-        # done=True efface le spinner ; done=False affiche le spinner.
+        # En mode pipelines, l'event est injecté dans le flux streamé.
         def _emit(description: str, done: bool = False) -> None:
-            if __event_emitter__ and self.valves.realtime_status:
+            if runtime_event_emitter and self.valves.realtime_status:
                 asyncio.run_coroutine_threadsafe(
-                    __event_emitter__({"type": "status", "data": {"description": description, "done": done}}),
+                    runtime_event_emitter({"type": "status", "data": {"description": description, "done": done}}),
                     self._loop,
                 )
 
@@ -361,7 +384,7 @@ class Pipeline:
         chat_id = body.get("chat_id", body.get("session_id", "default"))
         config = {"configurable": {
             "thread_id": chat_id,
-            "event_emitter": __event_emitter__ if self.valves.realtime_status else None,
+            "event_emitter": runtime_event_emitter if self.valves.realtime_status else None,
             "show_reasoning": self.valves.show_reasoning,
             "show_agent_reasoning": self.valves.show_agent_reasoning,
             "show_model_reasoning": self.valves.show_model_reasoning,
@@ -395,11 +418,10 @@ class Pipeline:
             yield f"[Erreur d'initialisation du graphe : {exc}]"
             return
 
-        q: queue.Queue = queue.Queue()
         asyncio.run_coroutine_threadsafe(
             self._run_and_synthesize_async(
                 q, graph, initial_state, config,
-                __event_emitter__, self._models,
+                runtime_event_emitter, self._models,
                 messages, lc_messages, images_b64, user_message,
             ),
             self._loop,
