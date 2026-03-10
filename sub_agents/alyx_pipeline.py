@@ -307,7 +307,6 @@ class Pipeline:
         pollinations_enhance: bool = Field(default=True, description="Amélioration IA du prompt par Pollinations avant génération")
 
     def __init__(self):
-        self.id = "alyx"
         self.name = "Alyx"
         self.valves = self.Valves()
         self._graph = None
