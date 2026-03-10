@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 
@@ -46,9 +47,18 @@ Reply in English with structured output.
 """
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
 
     context_parts: list[str] = []
 
@@ -56,6 +66,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     math_expr = _extract_math_expression(user_text)
     if math_expr:
         try:
+            await _emit(f"🧮 Calcul : {math_expr[:120]}")
             result = await call_tool("calculator", "evaluate", {"expression": math_expr})
             context_parts.append(f"## Calculator result\nExpression: `{math_expr}`\nResult: {json.dumps(result, ensure_ascii=False)}")
         except Exception as exc:
@@ -65,6 +76,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     sql_query = _extract_sql_query(user_text)
     if sql_query:
         try:
+            await _emit("🗃️ Requête DuckDB…")
             result = await call_tool("duckdb", "query", {"sql": sql_query})
             context_parts.append(f"## DuckDB result\nQuery: `{sql_query}`\nResult: {json.dumps(result, ensure_ascii=False)[:2000]}")
         except Exception as exc:
@@ -74,6 +86,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     ticker = _extract_ticker(user_text)
     if ticker:
         try:
+            await _emit(f"📈 Données financières : {ticker}")
             result = await call_tool("yahoo-finance", "get_stock_info", {"symbol": ticker})
             context_parts.append(f"## Yahoo Finance ({ticker})\n{json.dumps(result, ensure_ascii=False, indent=2)[:3000]}")
         except Exception as exc:
@@ -97,6 +110,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     )
 
     prompt = f"{context}\n\nUser question: {user_text}" if context else user_text
+    await _emit("✍️ Synthèse des données…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),

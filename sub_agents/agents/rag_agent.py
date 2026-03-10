@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.rag_client import search
 
@@ -32,12 +33,22 @@ Reply in English with structured, accurate output.
 """
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
 
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
+
     rag_context = ""
     try:
+        await _emit("📚 Recherche dans les documents importés…")
         results = await search(query_text=user_text, collection=_QDRANT_COLLECTION, top_k=5)
         if results:
             chunks = []
@@ -62,6 +73,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         temperature=0.15,
     )
 
+    await _emit("✍️ Synthèse documentaire…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=f"## Document excerpts\n{rag_context}\n\nUser question: {user_text}"),

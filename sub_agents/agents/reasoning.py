@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 
@@ -50,11 +51,20 @@ Rules:
   - Conclude with a short, actionable summary (≤ 5 bullet points).
   - Reply in the same language as the original question.
 """
-
-
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+    show_reasoning = bool((config.get("configurable") or {}).get("show_reasoning")) if config else False
+    show_agent_reasoning = bool((config.get("configurable") or {}).get("show_agent_reasoning", True)) if config else True
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
 
     llm = ChatOpenAI(
         model=model or _MODEL,
@@ -68,6 +78,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     context_parts: list[str] = []
 
     # 1. Décomposer la question en étapes d'analyse
+    await _emit("🧩 Décomposition analytique…")
     decomp_resp = await llm.ainvoke([
         SystemMessage(content=_DECOMPOSE_SYSTEM),
         HumanMessage(content=user_text),
@@ -89,6 +100,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
 
     # 2. Sequential-thinking pour chaque étape
     for i, step in enumerate(steps, 1):
+        await _emit(f"🧩 Étape {i}/{len(steps)} · {step[:120]}")
         try:
             result = await call_tool("sequential-thinking", "sequentialthinking", {
                 "thought": step,
@@ -98,12 +110,18 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
             })
             result_str = json.dumps(result, ensure_ascii=False, indent=2) if isinstance(result, (dict, list)) else str(result)
             context_parts.append(f"## Step {i}: {step}\n{result_str[:2000]}")
+            if show_reasoning and show_agent_reasoning:
+                summary = _compact_status_reasoning(result_str)
+                if summary:
+                    await _emit(f"💭 Étape {i}/{len(steps)} · {summary}")
         except Exception as exc:
             context_parts.append(f"## Step {i}: {step}\n[Sequential-thinking unavailable: {exc}]")
+            await _emit(f"⚠️ Étape {i}/{len(steps)} indisponible")
 
     context = "\n\n".join(context_parts) if context_parts else "(no structured thinking available)"
 
     # 3. Synthèse finale
+    await _emit("✍️ Synthèse du raisonnement…")
     synthesis_prompt = (
         f"## Original question\n{user_text}\n\n"
         f"## Structured thinking process\n{context}\n\n"
@@ -132,3 +150,10 @@ def _last_user_message(messages: list) -> str:
         if msg.type == "human":
             return msg.content if isinstance(msg.content, str) else ""
     return ""
+
+
+def _compact_status_reasoning(text: str, max_len: int = 220) -> str:
+    text = " ".join(text.split())
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "…"

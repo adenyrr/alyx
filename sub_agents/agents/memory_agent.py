@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 
@@ -47,13 +48,23 @@ Reply in English only.
 """
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     """Consulte la mémoire et retourne les informations pertinentes."""
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
 
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
+
     recall_result = ""
     try:
+        await _emit("🧠 Recherche en mémoire…")
         memories = await call_tool("memory", "search_nodes", {"query": user_text})
         recall_result = json.dumps(memories, ensure_ascii=False)[:2000]
     except Exception:
@@ -69,6 +80,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         temperature=0.1,
     )
 
+    await _emit("✍️ Synthèse de la mémoire…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM_RECALL),
         HumanMessage(content=f"Knowledge graph results:\n{recall_result}\n\nUser question: {user_text}"),

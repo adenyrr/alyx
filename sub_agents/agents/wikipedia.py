@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 
@@ -43,9 +44,18 @@ sans explication.
 """
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
 
     llm = ChatOpenAI(
         model=model or _MODEL,
@@ -70,6 +80,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     # 2. Recherche Wikipedia via MCPO
     wiki_raw = ""
     try:
+        await _emit(f"📖 Recherche Wikipédia : {keywords}")
         result = await call_tool("wikipedia", "search", {"query": keywords, "limit": 3})
         wiki_raw = json.dumps(result, ensure_ascii=False, indent=2)[:6000]
     except Exception as exc:
@@ -81,6 +92,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
         f"\n\nQuestion utilisateur : {user_text}"
     )
 
+    await _emit("✍️ Synthèse Wikipédia…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),

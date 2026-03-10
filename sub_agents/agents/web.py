@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 from tools.playwright_client import fetch_url as playwright_fetch
@@ -64,10 +65,19 @@ async def _fetch_url_with_fallback(url: str) -> str:
             return f"Inaccessible : {exc}"
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
     current_date = state.get("current_date", "")
+
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
 
     llm = ChatOpenAI(
         model=model or _MODEL,
@@ -91,12 +101,14 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     # Cas URL explicite dans la question
     explicit_url = _extract_url(user_text)
     if explicit_url:
+        await _emit(f"🌐 Lecture de {explicit_url[:100]}")
         content = await _fetch_url_with_fallback(explicit_url)
         context_parts.append(f"## Contenu de {explicit_url}\n{content}")
     else:
         # 2. Recherche DuckDuckGo
         ddg_raw = ""
         try:
+            await _emit(f"🔎 Recherche web : {keywords}")
             ddg_result = await call_tool("duckduckgo", "search", {
                 "query": keywords,
                 "max_results": 5,
@@ -107,6 +119,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
             # 3. Visiter les 3 premières URLs
             urls = _extract_urls_from_ddg(ddg_result)[:3]
             for url in urls:
+                await _emit(f"📄 Lecture source web : {url[:100]}")
                 content = await _fetch_url_with_fallback(url)
                 context_parts.append(f"## Contenu de {url}\n{content}")
         except Exception as exc:
@@ -118,6 +131,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     context = "\n\n".join(context_parts)
     prompt = f"{context}\n\nQuestion utilisateur : {user_text}"
 
+    await _emit("✍️ Synthèse web…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),

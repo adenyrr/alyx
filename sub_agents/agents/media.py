@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 
@@ -30,9 +31,18 @@ Reply in English with clear, structured output.
 """
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
 
     context_parts: list[str] = []
 
@@ -40,6 +50,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     yt_url = _extract_youtube_url(user_text)
     if yt_url:
         try:
+            await _emit("🎬 Récupération de la transcription YouTube…")
             transcript = await call_tool("youtube-transcript", "get_transcript", {"url": yt_url})
             context_parts.append(f"## YouTube transcript ({yt_url})\n{json.dumps(transcript, ensure_ascii=False)[:4000]}")
         except Exception as exc:
@@ -49,6 +60,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     doc_url = _extract_doc_url(user_text)
     if doc_url and not yt_url:
         try:
+            await _emit("📄 Conversion du document…")
             converted = await call_tool("markitdown", "convert_url", {"url": doc_url})
             context_parts.append(f"## Document content ({doc_url})\n{json.dumps(converted, ensure_ascii=False)[:4000]}")
         except Exception as exc:
@@ -63,6 +75,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     )
 
     prompt = f"{context}\n\nUser request: {user_text}" if context else user_text
+    await _emit("✍️ Synthèse média…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),

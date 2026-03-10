@@ -30,7 +30,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Generator
+from typing import Any, Awaitable, Callable, Generator
 
 # Garantit que graph/, agents/, tools/ sont importables depuis /app/pipelines/
 _PIPELINES_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -128,13 +128,11 @@ Tu t'exprimes EXCLUSIVEMENT en {language}, quelle que soit la langue de l'utilis
 Date du jour : {current_date}
 
 ═══════════════ COMPORTEMENT ════════════════
-Utilise les balises <think>…</think> UNIQUEMENT si :
-  - Des résultats d’agents te sont fournis ci-dessous, OU
-  - La question est complexe (raisonnement multi-étapes, analyse, comparaison).
-Pour les échanges simples (salutations, questions courtes, conversations), réponds
-DIRECTEMENT sans balise <think>.
-Dans <think>, inclus uniquement ton plan de synthèse, pas de copie des résultats agents.
-La réponse finale arrive APRÈS la fermeture </think>, hors des balises.
+Réponds toujours directement dans le corps final du message.
+N'affiche JAMAIS de balises de raisonnement, de réflexion interne ou de pseudo-XML
+comme <think>, <thinking>, <analysis>, <plan>, <synchro> ou équivalent.
+Si un raisonnement interne est produit par le modèle, il est géré séparément par
+le système et NE DOIT PAS apparaître dans la réponse finale.
 
 RÈGLE ABSOLUE — Réponses directes et complètes :
   - Les agents ont DÉJÀ terminé. Leurs résultats sont dans ce prompt.
@@ -223,7 +221,9 @@ class Pipeline:
         # --- Comportement ---
         stream_agent_status: bool = Field(default=True, description="Streamer une ligne de statut avant la réponse (agents invoqués)")
         show_model_footer: bool = Field(default=True, description="Afficher un pied de page (modèle + agents) en fin de réponse")
-        show_reasoning: bool = Field(default=False, description="Afficher le raisonnement interne (champ reasoning_content)")
+        show_reasoning: bool = Field(default=False, description="Afficher le raisonnement en temps réel dans l'interface (jamais dans la réponse finale)")
+        show_agent_reasoning: bool = Field(default=True, description="Afficher le raisonnement structuré des agents via les statuts OpenWebUI")
+        show_model_reasoning: bool = Field(default=False, description="Afficher le reasoning_content du modèle de synthèse via les statuts OpenWebUI")
         show_perf_stats: bool = Field(default=False, description="Afficher les métriques de performance dans la signature (⏱ temps, tokens, coût estimé)")
         realtime_status: bool = Field(default=True, description="Émettre des statuts OpenWebUI en temps réel (quel agent travaille)")
         enable_memory_bg: bool = Field(default=True, description="Activer la condensation mémoire en arrière-plan")
@@ -362,6 +362,9 @@ class Pipeline:
         config = {"configurable": {
             "thread_id": chat_id,
             "event_emitter": __event_emitter__ if self.valves.realtime_status else None,
+            "show_reasoning": self.valves.show_reasoning,
+            "show_agent_reasoning": self.valves.show_agent_reasoning,
+            "show_model_reasoning": self.valves.show_model_reasoning,
         }}
 
         initial_state = {
@@ -426,20 +429,34 @@ class Pipeline:
 
         async def _emit(description: str, done: bool = False, hidden: bool = False) -> None:
             if event_emitter and self.valves.realtime_status:
-                try:
-                    data: dict = {"description": description, "done": done}
-                    if hidden:
-                        data["hidden"] = True
-                    await event_emitter({"type": "status", "data": data})
-                except Exception:
-                    pass
+                await _emit_status(event_emitter, description, done=done, hidden=hidden)
+
+        model_reasoning_enabled = self.valves.show_reasoning and self.valves.show_model_reasoning
+        model_reasoning_buffer = ""
+
+        async def _emit_model_reasoning(piece: str = "", final: bool = False) -> None:
+            nonlocal model_reasoning_buffer
+            if not (event_emitter and model_reasoning_enabled):
+                return
+            if piece:
+                model_reasoning_buffer += piece
+
+            should_flush = final or len(model_reasoning_buffer) >= 220 or "\n" in model_reasoning_buffer
+            if not should_flush:
+                return
+
+            chunk = _compact_reasoning_text(model_reasoning_buffer)
+            model_reasoning_buffer = ""
+            if chunk:
+                await _emit_status(event_emitter, f"💭 {chunk}", done=False, hidden=False)
 
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
         agent_metrics: dict[str, dict] = {}
         t0 = time.perf_counter()
-        extra_body: dict = {} if self.valves.show_reasoning else {"enable_thinking": False}
+        extra_body: dict = {} if model_reasoning_enabled else {"enable_thinking": False}
         try:
+            await _emit("🧭 Routage de la demande…")
             # Exécuter le graphe
             agent_outputs, artifacts, agent_metrics = await self._run_graph(
                 graph, initial_state, config, event_emitter, models=models
@@ -494,8 +511,14 @@ class Pipeline:
                     stream_options={"include_usage": True},
                     extra_body=extra_body,
                 )
-                async for token in self._astream_response(stream, self.valves.show_reasoning, usage_out=direct_usage_out):
+                async for token in self._astream_response(
+                    stream,
+                    show_model_reasoning=model_reasoning_enabled,
+                    usage_out=direct_usage_out,
+                    reasoning_handler=_emit_model_reasoning if model_reasoning_enabled else None,
+                ):
                     q.put(token)
+                await _emit_model_reasoning(final=True)
                 elapsed = time.perf_counter() - t0
                 if direct_usage_out:
                     u = direct_usage_out[0]
@@ -569,8 +592,14 @@ class Pipeline:
                 stream_options={"include_usage": True},
                 extra_body=extra_body,
             )
-            async for token in self._astream_response(stream, self.valves.show_reasoning, usage_out=synth_usage_out):
+            async for token in self._astream_response(
+                stream,
+                show_model_reasoning=model_reasoning_enabled,
+                usage_out=synth_usage_out,
+                reasoning_handler=_emit_model_reasoning if model_reasoning_enabled else None,
+            ):
                 q.put(token)
+            await _emit_model_reasoning(final=True)
             elapsed = time.perf_counter() - t0
             if synth_usage_out:
                 u = synth_usage_out[0]
@@ -685,33 +714,23 @@ class Pipeline:
                 yield flushed
 
     @staticmethod
-    async def _astream_response(stream, show_reasoning: bool, usage_out: list | None = None):
+    async def _astream_response(
+        stream,
+        show_model_reasoning: bool,
+        usage_out: list | None = None,
+        reasoning_handler: Callable[[str, bool], Awaitable[None]] | None = None,
+    ):
         """
         Stream OpenAI async.
-        - Champ reasoning_content (modèles o-series, DeepSeek) : converti en blockquote
-          si show_reasoning=True, supprimé sinon.
-        - Balises <think>…</think> dans le contenu : passées telles quelles si
-          show_reasoning=True, filtrées silencieusement sinon (fallback si
-          enable_thinking=False n'est pas honoré par le modèle).
+        - Le raisonnement (`reasoning_content` ou balises <think>) est envoyé vers
+          un handler d'interface dédié, jamais concaténé au message final.
+        - Le contenu final streamé vers l'utilisateur·rice reste limité au texte
+          de réponse visible et persistant du pipe.
         - usage_out : si fourni, reçoit le dernier objet usage (stream_options include_usage).
         """
-        reasoning_parts: list[str] = []
-
-        def _flush_reasoning() -> str:
-            block = "".join(reasoning_parts).strip()
-            reasoning_parts.clear()
-            if not block or not show_reasoning:
-                return ""
-            lines = block.splitlines()
-            out = "> 💭 **Raisonnement**\n>\n"
-            out += "\n".join(f"> {ln}" for ln in lines)
-            out += "\n\n"
-            return out
-
         buf = ""
         in_think = False
         current_think_tag = ""  # nom du tag ouvrant en cours (ex: "synchro", "think")
-        think_buf = ""  # accumule les tokens à filtrer à l'intérieur d'un tag de réflexion
         # Pattern : détecte l'ouverture d'une balise de réflexion interne connue
         _OPEN_RE = re.compile(
             r"<(think(?:ing)?|synchro|inner[_\s]monologue|plan(?:[_\s]de[_\s]synth[èe]se)?)[^>]*>",
@@ -731,7 +750,8 @@ class Pipeline:
             if rc is None and getattr(delta, "model_extra", None):
                 rc = delta.model_extra.get("reasoning_content")
             if rc:
-                reasoning_parts.append(rc)
+                if show_model_reasoning and reasoning_handler:
+                    await reasoning_handler(str(rc), False)
                 continue
 
             text = delta.content or ""
@@ -746,18 +766,14 @@ class Pipeline:
                     end = buf.lower().find(close_tag.lower())
                     if end >= 0:
                         inner = buf[:end]
+                        if show_model_reasoning and reasoning_handler and inner:
+                            await reasoning_handler(inner, False)
                         buf = buf[end + len(close_tag):]
                         in_think = False
-                        if show_reasoning:
-                            out += think_buf + inner + close_tag
-                        think_buf = ""
                         current_think_tag = ""
-                        reasoning_parts.clear()
                     else:
-                        if show_reasoning:
-                            out += buf
-                        else:
-                            think_buf += buf  # avaler sans émettre
+                        if show_model_reasoning and reasoning_handler and buf:
+                            await reasoning_handler(buf, False)
                         buf = ""
                 else:
                     m = _OPEN_RE.search(buf)
@@ -766,9 +782,6 @@ class Pipeline:
                         current_think_tag = m.group(1).lower()
                         buf = buf[m.end():]
                         in_think = True
-                        if show_reasoning:
-                            out += m.group(0)
-                        think_buf = ""
                     else:
                         # Garder un suffixe en buffer pour les tags fragmentés entre chunks
                         # (ex: "<think" reçu, ">" arrivera dans le prochain chunk)
@@ -781,10 +794,8 @@ class Pipeline:
 
         if buf:
             yield buf
-        if reasoning_parts:
-            flushed = _flush_reasoning()
-            if flushed:
-                yield flushed
+        if reasoning_handler:
+            await reasoning_handler("", True)
 
     @staticmethod
     async def _run_graph(graph, initial_state: dict, config: dict, event_emitter=None, models: dict | None = None):
@@ -796,10 +807,7 @@ class Pipeline:
 
         async def _emit(description: str, done: bool = False) -> None:
             if event_emitter:
-                try:
-                    await event_emitter({"type": "status", "data": {"description": description, "done": done}})
-                except Exception:
-                    pass
+                await _emit_status(event_emitter, description, done=done)
 
         async def _handle_agent_output(node_name: str, node_output: dict) -> None:
             """Met à jour agent_outputs/artifacts/metrics et émet notifications d'erreur."""
@@ -808,9 +816,9 @@ class Pipeline:
             pending.discard(node_name)
             if pending:
                 remaining_labels = "  ·  ".join(_AGENT_ICONS.get(a, a) for a in pending)
-                await _emit(f"✅ {icon} — en cours : {remaining_labels}")
+                await _emit(f"✅ {icon} terminé · En attente : {remaining_labels}")
             else:
-                await _emit(f"✅ {icon} ({model_name})")
+                await _emit(f"✅ {icon} terminé ({model_name})")
 
             agent_outputs.update(node_output.get("agent_outputs", {}))
             artifacts.extend(node_output.get("artifacts", []))
@@ -819,13 +827,7 @@ class Pipeline:
             if event_emitter:
                 for _n, out_text in node_output.get("agent_outputs", {}).items():
                     if isinstance(out_text, str) and out_text.startswith(("⚠️", "⏱️")):
-                        try:
-                            await event_emitter({"type": "notification", "data": {
-                                "type": "warning",
-                                "content": f"{icon} : {out_text[:120]}",
-                            }})
-                        except Exception:
-                            pass
+                        await _emit_notification(event_emitter, "warning", f"{icon} : {out_text[:120]}")
 
         # ── Phase 1 : exécution du graphe LangGraph ────────────────────────────
         async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
@@ -836,7 +838,10 @@ class Pipeline:
                     if routing:
                         pending = set(routing)
                         labels = "  ·  ".join(_AGENT_ICONS.get(a, a) for a in routing)
-                        await _emit(f"Invocation des agents : {labels}")
+                        if routing_next:
+                            await _emit(f"Phase 1 · {labels}")
+                        else:
+                            await _emit(f"Invocation des agents : {labels}")
                     continue
                 await _handle_agent_output(node_name, node_output)
 
@@ -845,7 +850,7 @@ class Pipeline:
         valid_next = [n for n in routing_next if n in _AGENT_MODULES]
         if valid_next:
             labels2 = "  ·  ".join(_AGENT_ICONS.get(n, n) for n in valid_next)
-            await _emit(f"Phase 2 — {labels2}")
+            await _emit(f"Phase 2 · Transmission du contexte à {labels2}")
             pending = set(valid_next)
 
             # Construire l'état phase 2 avec le contexte phase 1 inclus
@@ -876,6 +881,33 @@ class Pipeline:
                     agent_outputs[name] = f"⚠️ [Erreur phase 2] {result}"
 
         return agent_outputs, artifacts, agent_metrics
+
+
+async def _emit_event(event_emitter, event_type: str, data: dict[str, Any]) -> None:
+    if not event_emitter:
+        return
+    try:
+        await event_emitter({"type": event_type, "data": data})
+    except Exception:
+        pass
+
+
+async def _emit_status(event_emitter, description: str, done: bool = False, hidden: bool = False) -> None:
+    data: dict[str, Any] = {"description": description, "done": done}
+    if hidden:
+        data["hidden"] = True
+    await _emit_event(event_emitter, "status", data)
+
+
+async def _emit_notification(event_emitter, level: str, content: str) -> None:
+    await _emit_event(event_emitter, "notification", {"type": level, "content": content})
+
+
+def _compact_reasoning_text(text: str, max_len: int = 280) -> str:
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 1].rstrip() + "…"
 
 
 def _strip_think_tags(text: str) -> str:

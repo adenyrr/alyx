@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 
@@ -43,9 +44,18 @@ Retourne UNIQUEMENT le nom du lieu, sans explication.
 """
 
 
-async def run(state: "AlyxState", model: str | None = None) -> dict:
+async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+
+    emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
+
+    async def _emit(desc: str) -> None:
+        if emitter:
+            try:
+                await emitter({"type": "status", "data": {"description": desc, "done": False}})
+            except Exception:
+                pass
 
     llm = ChatOpenAI(
         model=model or _MODEL,
@@ -70,6 +80,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
 
     # 2. Géocodage OSM
     try:
+        await _emit(f"🗺️ Géolocalisation : {location}")
         osm_result = await call_tool("osm-mcp-server", "geocode", {"q": location, "limit": 1})
         osm_str = json.dumps(osm_result, ensure_ascii=False, indent=2)
         context_parts.append(f"## OSM geocoding ({location!r})\n{osm_str[:2000]}")
@@ -87,6 +98,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     # 3. Météo Open-Meteo si coordonnées disponibles
     if lat is not None and lon is not None:
         try:
+            await _emit(f"🌦️ Météo pour {location}")
             meteo_result = await call_tool("openmeteo", "get_forecast", {
                 "latitude": lat,
                 "longitude": lon,
@@ -111,6 +123,7 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
     context = "\n\n".join(context_parts)
     prompt = f"{context}\n\nQuestion utilisateur : {user_text}"
 
+    await _emit("✍️ Synthèse géographique…")
     response = await llm.ainvoke([
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=prompt),
