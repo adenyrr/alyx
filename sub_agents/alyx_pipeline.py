@@ -228,12 +228,12 @@ def _build_pipeline_event_emitter(
 def _build_pipeline_reasoning_emitter(
     q: "queue.Queue",
     model_name: str,
-) -> Callable[[str], Awaitable[None]]:
-    """Émet des chunks OpenAI `reasoning_content` pour un rendu séparé du statut."""
+) -> Callable[[str, bool], Awaitable[None]]:
+    """Émet du raisonnement via des chunks de contenu encapsulés dans `<think>...</think>`."""
 
-    async def _queue_reasoning(text: str) -> None:
-        if not text:
-            return
+    is_open = False
+
+    def _push_content(content: str) -> None:
         q.put({
             "id": f"alyx-reasoning-{time.time_ns()}",
             "object": "chat.completion.chunk",
@@ -241,10 +241,21 @@ def _build_pipeline_reasoning_emitter(
             "model": model_name,
             "choices": [{
                 "index": 0,
-                "delta": {"reasoning_content": text},
+                "delta": {"content": content},
                 "finish_reason": None,
             }],
         })
+
+    async def _queue_reasoning(text: str, final: bool = False) -> None:
+        nonlocal is_open
+        if text:
+            if not is_open:
+                _push_content("<think>")
+                is_open = True
+            _push_content(text)
+        if final and is_open:
+            _push_content("</think>")
+            is_open = False
 
     return _queue_reasoning
 
@@ -267,7 +278,7 @@ class Pipeline:
         show_model_footer: bool = Field(default=True, description="Afficher un pied de page (modèle + agents) en fin de réponse")
         show_reasoning: bool = Field(default=False, description="Afficher le raisonnement en temps réel dans l'interface (jamais dans la réponse finale)")
         show_agent_reasoning: bool = Field(default=True, description="Afficher le raisonnement structuré des agents dans le flux de reasoning OpenWebUI")
-        show_model_reasoning: bool = Field(default=False, description="Afficher le reasoning_content du modèle de synthèse dans le flux de reasoning OpenWebUI")
+        show_model_reasoning: bool = Field(default=False, description="Afficher le raisonnement du modèle de synthèse dans des blocs <think> OpenWebUI")
         show_perf_stats: bool = Field(default=False, description="Afficher les métriques de performance dans la signature (⏱ temps, tokens, coût estimé)")
         realtime_status: bool = Field(default=True, description="Émettre des statuts OpenWebUI en temps réel (quel agent travaille)")
         enable_memory_bg: bool = Field(default=True, description="Activer la condensation mémoire en arrière-plan")
@@ -386,7 +397,10 @@ class Pipeline:
         """
         q: queue.Queue = queue.Queue()
         runtime_event_emitter = _build_pipeline_event_emitter(q, __event_emitter__)
-        runtime_reasoning_emitter = _build_pipeline_reasoning_emitter(q, self.valves.alyx_model)
+        runtime_reasoning_stream_emitter = _build_pipeline_reasoning_emitter(q, self.valves.alyx_model)
+
+        async def _emit_reasoning(text: str) -> None:
+            await runtime_reasoning_stream_emitter(text, False)
 
         # Helper : émet un statut OpenWebUI natif depuis le contexte synchrone.
         # En mode pipelines, l'event est injecté dans le flux streamé.
@@ -414,7 +428,7 @@ class Pipeline:
         config = {"configurable": {
             "thread_id": chat_id,
             "event_emitter": runtime_event_emitter if self.valves.realtime_status else None,
-            "reasoning_emitter": runtime_reasoning_emitter if self.valves.show_reasoning else None,
+            "reasoning_emitter": _emit_reasoning if self.valves.show_reasoning else None,
             "show_reasoning": self.valves.show_reasoning,
             "show_agent_reasoning": self.valves.show_agent_reasoning,
             "show_model_reasoning": self.valves.show_model_reasoning,
@@ -451,7 +465,7 @@ class Pipeline:
         asyncio.run_coroutine_threadsafe(
             self._run_and_synthesize_async(
                 q, graph, initial_state, config,
-                runtime_event_emitter, self._models,
+                runtime_event_emitter, runtime_reasoning_stream_emitter, self._models,
                 messages, lc_messages, images_b64, user_message,
             ),
             self._loop,
@@ -470,6 +484,7 @@ class Pipeline:
         initial_state: dict,
         config: dict,
         event_emitter,
+        reasoning_emitter,
         models: dict,
         messages: list[dict],
         lc_messages: list,
@@ -501,7 +516,9 @@ class Pipeline:
             chunk = _compact_reasoning_text(model_reasoning_buffer)
             model_reasoning_buffer = ""
             if chunk:
-                await reasoning_stream_emitter(chunk)
+                await reasoning_stream_emitter(chunk, final)
+            elif final:
+                await reasoning_stream_emitter("", True)
 
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
@@ -514,6 +531,8 @@ class Pipeline:
             agent_outputs, artifacts, agent_metrics = await self._run_graph(
                 graph, initial_state, config, event_emitter, models=models
             )
+            if reasoning_emitter and self.valves.show_reasoning:
+                await reasoning_emitter("", True)
 
             # ── FAST PATH image_gen seul ────────────────────────────────────────
             # Pas de synthèse LLM : on émet directement l'image Markdown.
@@ -526,7 +545,7 @@ class Pipeline:
                     asyncio.ensure_future(_emit_chat_title(event_emitter, user_message))
                 q.put(agent_outputs["image_gen"])
                 elapsed = time.perf_counter() - t0
-                await _emit("✅ Terminé", done=True, hidden=True)
+                await _emit("✅ Terminé", done=True)
                 if self.valves.show_model_footer:
                     q.put(f"\n\n---\n*{_build_footer(self.valves.alyx_model, agent_outputs, models, agent_metrics, elapsed, self.valves.show_perf_stats)}*")
                 return
@@ -580,7 +599,7 @@ class Pipeline:
                         "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
                         "model": self.valves.alyx_model,
                     }
-                await _emit("✅ Terminé", done=True, hidden=True)
+                await _emit("✅ Terminé", done=True)
                 if self.valves.show_model_footer:
                     footer = _build_footer(
                         alyx_model=self.valves.alyx_model,
@@ -661,7 +680,7 @@ class Pipeline:
                     "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
                     "model": self.valves.alyx_model,
                 }
-            await _emit("✅ Terminé", done=True, hidden=True)
+            await _emit("✅ Terminé", done=True)
 
             # Pied de page
             if self.valves.show_model_footer:
@@ -703,7 +722,7 @@ class Pipeline:
         """
         Wrapper de stream OpenAI synchrone.
         - Balises <think>…</think> : passées TELLES QUELLES (rendu natif OpenWebUI).
-        - Champ delta.reasoning_content : converti en blockquote si show_reasoning=True.
+        - Champ delta.reasoning_content : converti en sortie dédiée si show_reasoning=True.
         """
         reasoning_parts: list[str] = []
 
@@ -757,6 +776,9 @@ class Pipeline:
                         out += buf
                         buf = ""
             if out:
+                if reasoning_open and reasoning_handler:
+                    await reasoning_handler("", True)
+                    reasoning_open = False
                 yield out
 
         if buf:
@@ -784,6 +806,7 @@ class Pipeline:
         buf = ""
         in_think = False
         current_think_tag = ""  # nom du tag ouvrant en cours (ex: "synchro", "think")
+        reasoning_open = False
         # Pattern : détecte l'ouverture d'une balise de réflexion interne connue
         _OPEN_RE = re.compile(
             r"<(think(?:ing)?|synchro|inner[_\s]monologue|plan(?:[_\s]de[_\s]synth[èe]se)?)[^>]*>",
@@ -805,11 +828,16 @@ class Pipeline:
             if rc:
                 if show_model_reasoning and reasoning_handler:
                     await reasoning_handler(str(rc), False)
+                    reasoning_open = True
                 continue
 
             text = delta.content or ""
             if not text:
                 continue
+
+            if reasoning_open and reasoning_handler:
+                await reasoning_handler("", True)
+                reasoning_open = False
 
             buf += text
             out = ""
@@ -821,12 +849,14 @@ class Pipeline:
                         inner = buf[:end]
                         if show_model_reasoning and reasoning_handler and inner:
                             await reasoning_handler(inner, False)
+                            reasoning_open = True
                         buf = buf[end + len(close_tag):]
                         in_think = False
                         current_think_tag = ""
                     else:
                         if show_model_reasoning and reasoning_handler and buf:
                             await reasoning_handler(buf, False)
+                            reasoning_open = True
                         buf = ""
                 else:
                     m = _OPEN_RE.search(buf)
@@ -847,7 +877,7 @@ class Pipeline:
 
         if buf:
             yield buf
-        if reasoning_handler:
+        if reasoning_handler and reasoning_open:
             await reasoning_handler("", True)
 
     @staticmethod
