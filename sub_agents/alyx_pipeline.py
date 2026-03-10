@@ -399,8 +399,8 @@ class Pipeline:
         runtime_event_emitter = _build_pipeline_event_emitter(q, __event_emitter__)
         runtime_reasoning_stream_emitter = _build_pipeline_reasoning_emitter(q, self.valves.alyx_model)
 
-        async def _emit_reasoning(text: str) -> None:
-            await runtime_reasoning_stream_emitter(text, False)
+        async def _emit_reasoning(text: str, final: bool = False) -> None:
+            await runtime_reasoning_stream_emitter(text, final)
 
         # Helper : émet un statut OpenWebUI natif depuis le contexte synchrone.
         # En mode pipelines, l'event est injecté dans le flux streamé.

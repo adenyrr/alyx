@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
@@ -73,7 +74,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         ],
         config={"max_tokens": 20},
     )
-    keywords = kw_resp.content.strip().replace("\n", " ")[:100]
+    keywords = re.sub(r"<think(?:ing)?[^>]*>.*?</think(?:ing)?>", "", kw_resp.content, flags=re.DOTALL | re.IGNORECASE).strip().replace("\n", " ")[:100]
     _prompt_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
     _completion_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
 

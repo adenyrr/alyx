@@ -92,7 +92,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         [SystemMessage(content=_KW_SYSTEM), HumanMessage(content=user_text)],
         config={"max_tokens": 40},
     )
-    keywords = kw_resp.content.strip().replace("\n", " ")[:120]
+    keywords = re.sub(r"<think(?:ing)?[^>]*>.*?</think(?:ing)?>", "", kw_resp.content, flags=re.DOTALL | re.IGNORECASE).strip().replace("\n", " ")[:120]
     _prompt_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
     _completion_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
 
