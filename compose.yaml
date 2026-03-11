@@ -49,8 +49,8 @@ services:
       ENABLE_MCP_SERVERS: "true"
       MCP_SERVER_BASE_URL: "http://mcpo:8000"
       # LiteLLM + Pipelines (Alyx) — multi-source
-      OPENAI_API_BASE_URLS: "http://litellm:4000/v1;http://pipelines:9099"
-      OPENAI_API_KEYS: "${LITELLM_MASTER_KEY};${PIPELINES_API_KEY}"
+      OPENAI_API_BASE_URLS: "http://pipelines:9099"
+      OPENAI_API_KEYS: "${PIPELINES_API_KEY}"
       #SSO
       ENABLE_OAUTH_SIGNUP: ${ENABLE_OAUTH_SIGNUP}
       OAUTH_MERGE_ACCOUNTS_BY_EMAIL: ${OAUTH_MERGE_ACCOUNTS_BY_EMAIL}
