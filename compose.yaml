@@ -85,7 +85,7 @@ services:
   # ──────────────────────────────────────────────
 
   pipelines:
-    image: ghcr.io/open-webui/pipelines:v0.3
+    image: ghcr.io/open-webui/pipelines:main
     container_name: pipelines
     # Port interne uniquement — OpenWebUI s'y connecte via le réseau Docker
     # ports:
