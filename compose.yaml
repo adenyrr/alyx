@@ -130,8 +130,7 @@ services:
       - llm-network
 
   litellm:
-    image: "${LITELLM_IMAGE:-ghcr.io/berriai/litellm:latest}"
-    platform: "${LITELLM_PLATFORM:-linux/amd64}"
+    image: docker.litellm.ai/berriai/litellm:main-stable
     container_name: litellm
     ports:
       - "4000:4000"   # API + UI d'administration
