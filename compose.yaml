@@ -85,7 +85,7 @@ services:
   # ──────────────────────────────────────────────
 
   pipelines:
-    image: ghcr.io/open-webui/pipelines:main
+    image: ghcr.io/open-webui/pipelines:v0.3
     container_name: pipelines
     # Port interne uniquement — OpenWebUI s'y connecte via le réseau Docker
     # ports:
@@ -130,7 +130,7 @@ services:
       - llm-network
 
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ghcr.io/berriai/litellm:v1.37.0
     container_name: litellm
     ports:
       - "4000:4000"   # API + UI d'administration
