@@ -146,6 +146,7 @@ services:
       # UI d'administration LiteLLM
       UI_USERNAME: "${LITELLM_UI_USERNAME:-admin}"
       UI_PASSWORD: "${LITELLM_UI_PASSWORD}"
+      STORE_MODEL_IN_DB: "${STORE_MODEL_IN_DB:-True}"
       # Clés fournisseurs (toutes optionnelles, selon usage)
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       OPENROUTER_API_BASE: "${OPENROUTER_API_BASE:-https://openrouter.ai/api/v1}"

@@ -131,5 +131,5 @@ general_settings:
   # max_budget: 100.0           # USD/mois global
   # budget_duration: "1mo"
 
-  store_model_in_db: true
+  store_model_in_db: os.environ/STORE_MODEL_IN_DB
   store_prompts_in_spend_logs: false
