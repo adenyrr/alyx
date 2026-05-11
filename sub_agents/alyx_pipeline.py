@@ -524,7 +524,9 @@ class Pipeline:
         artifacts: list[dict] = []
         agent_metrics: dict[str, dict] = {}
         t0 = time.perf_counter()
-        extra_body: dict = {} if model_reasoning_enabled else {"enable_thinking": False}
+        # Mistral ne supporte pas le paramètre enable_thinking
+        is_mistral = "mistral" in self.valves.alyx_model.lower()
+        extra_body: dict = {} if (model_reasoning_enabled or is_mistral) else {"enable_thinking": False}
         try:
             await _emit("🧭 Routage de la demande…")
             # Exécuter le graphe
@@ -1074,7 +1076,7 @@ async def _emit_chat_title(event_emitter, user_message: str) -> None:
             ],
             max_tokens=16,
             stream=False,
-            extra_body={"enable_thinking": False},
+            extra_body={},  # Mistral ne supporte pas enable_thinking
         )
         title = resp.choices[0].message.content.strip().strip('"\'')[:60]
         if title:
