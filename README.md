@@ -11,6 +11,8 @@ Le dépôt contient :
 - des agents spécialisés pour le web, Wikipédia, la recherche académique, le dev, la data, la géographie, les médias, le RAG, la mémoire et le raisonnement ;
 - une couche d’events Open WebUI pour les statuts, notifications, sources et métadonnées de conversation.
 
+![Exemple](./example.png)
+
 ## Schéma global
 
 Le diagramme suivant représente le flux complet, du message utilisateur jusqu’à la réponse finale streamée.
