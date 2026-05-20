@@ -3,7 +3,8 @@ RAG Agent — recherche dans les documents uploadés par l'utilisateur (Qdrant).
 Modèle : GPT-OSS 120B.
 Outil : Qdrant HTTP direct (via rag_client).
 
-Interroge la collection "openwebui" qui contient les documents traités par Tika + OpenWebUI RAG.
+Interroge la collection des bases de connaissances OpenWebUI (mode multitenancy :
+collection partagée "open-webui_knowledge"), alimentée par Tika + le RAG OpenWebUI.
 """
 
 from __future__ import annotations
@@ -23,7 +24,10 @@ if TYPE_CHECKING:
 _MODEL = "openrouter/gpt-oss"
 _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
 _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
-_QDRANT_COLLECTION = "openwebui"
+# Mode multitenancy OpenWebUI : les bases de connaissances sont consolidées dans
+# une collection partagée préfixée (par défaut "open-webui_knowledge"), avec un
+# filtre tenant_id par base. Surchargeable via QDRANT_COLLECTION.
+_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "open-webui_knowledge")
 
 _SYSTEM = """\
 You are a document retrieval specialist. Use the provided document excerpts to answer the user's question.

@@ -37,6 +37,13 @@ services:
       RAG_SYSTEM_CONTEXT: "true"
       CHUNK_MIN_SIZE_TARGET: "1000"
       TIKA_SERVER_URL: "http://tika:9998"
+      # Embedding — passe par LiteLLM pour utiliser le MÊME modèle que le
+      # pipeline Alyx (rag_client). Indexation et requête doivent être alignées,
+      # sinon les dimensions de vecteurs Qdrant ne correspondent pas.
+      RAG_EMBEDDING_ENGINE: "openai"
+      RAG_EMBEDDING_MODEL: "${RAG_EMBEDDING_MODEL:-openrouter/embedding}"
+      RAG_OPENAI_API_BASE_URL: "http://litellm:4000/v1"
+      RAG_OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
       # Features
       WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY}"
       ENABLE_IMAGE_GENERATION: "false"
@@ -105,7 +112,11 @@ services:
       # Qdrant
       QDRANT_URI: "http://qdrant:6333"
       QDRANT_API_KEY: "${QDRANT_API_KEY}"
-      RAG_EMBEDDING_MODEL: "${RAG_EMBEDDING_MODEL:-text-embedding-3-small}"
+      # Doit correspondre à l'alias d'embedding déclaré dans litellm_config.yaml
+      # ET au RAG_EMBEDDING_MODEL du service open-webui (cohérence index/requête).
+      RAG_EMBEDDING_MODEL: "${RAG_EMBEDDING_MODEL:-openrouter/embedding}"
+      # Collection Qdrant interrogée par l'agent rag (mode multitenancy OpenWebUI).
+      QDRANT_COLLECTION: "${QDRANT_COLLECTION:-open-webui_knowledge}"
       # PostgreSQL — base dédiée LangGraph
       DATABASE_URL: "postgresql://${PG_USER:-openwebui}:${PG_PASS}@postgres:5432/langgraph"
     healthcheck:
