@@ -50,10 +50,28 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             except Exception:
                 pass
 
+    # Isolation multi-tenant : on n'interroge QUE les bases de connaissances
+    # explicitement attachées à la conversation par OpenWebUI. Si rien n'est
+    # attaché, on refuse la recherche pour éviter toute fuite entre utilisateurs
+    # sur la collection partagée open-webui_knowledge.
+    owui = state.get("_owui") or {}
+    knowledge_ids = list(owui.get("knowledge_ids") or [])
+    if not knowledge_ids:
+        return {"agent_outputs": {"rag": (
+            "Aucune base de connaissances n'est attachée à cette conversation. "
+            "Pour activer la recherche documentaire, attache une base "
+            "(menu '+' → Knowledge) dans OpenWebUI puis relance la question."
+        )}}
+
     rag_context = ""
     try:
         await _emit("📚 Recherche dans les documents importés…")
-        results = await search(query_text=user_text, collection=_QDRANT_COLLECTION, top_k=5)
+        results = await search(
+            query_text=user_text,
+            collection=_QDRANT_COLLECTION,
+            top_k=5,
+            tenant_ids=knowledge_ids,
+        )
         if results:
             chunks = []
             for hit in results:

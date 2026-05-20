@@ -186,6 +186,58 @@ def _convert_messages(messages: list[dict]) -> list:
     return lc_messages
 
 
+def _extract_owui_context(body: dict) -> dict[str, Any]:
+    """
+    Extrait du body OpenWebUI le contexte d'autorisation nécessaire à l'isolation
+    multi-tenant du RAG (Qdrant multitenancy).
+
+    Le serveur OpenWebUI a déjà validé que l'utilisateur·rice a accès aux
+    ressources listées dans `body["files"]` — la pipeline s'appuie sur cette
+    liste pour restreindre les recherches Qdrant aux seules bases attachées
+    à la conversation. Cf. open-webui/backend/retrieval/vector/dbs/qdrant_multitenancy.py.
+
+    Returns:
+        {"user_id": str, "knowledge_ids": list[str], "file_ids": list[str]}
+    """
+    user = body.get("user") if isinstance(body, dict) else None
+    user_id = ""
+    if isinstance(user, dict):
+        user_id = str(user.get("id") or "")
+
+    raw = body.get("files") if isinstance(body, dict) else None
+    if not raw:
+        meta = body.get("metadata") if isinstance(body, dict) else None
+        if isinstance(meta, dict):
+            raw = meta.get("files")
+    if not isinstance(raw, list):
+        raw = []
+
+    knowledge_ids: list[str] = []
+    file_ids: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        t = str(item.get("type") or "").lower()
+        ident = item.get("id") or item.get("collection_id") or item.get("file_id")
+        if not ident:
+            inner = item.get("collection") or item.get("file")
+            if isinstance(inner, dict):
+                ident = inner.get("id")
+        if not ident:
+            continue
+        ident = str(ident)
+        if t in ("collection", "knowledge"):
+            knowledge_ids.append(ident)
+        elif t == "file":
+            file_ids.append(ident)
+
+    return {
+        "user_id": user_id,
+        "knowledge_ids": knowledge_ids,
+        "file_ids": file_ids,
+    }
+
+
 def _extract_images_b64(messages: list[dict]) -> list[str]:
     """Extrait les images base64 du dernier message utilisateur."""
     images: list[str] = []
@@ -452,6 +504,10 @@ class Pipeline:
                 "height":  self.valves.pollinations_height,
                 "enhance": self.valves.pollinations_enhance,
             },
+            # Isolation multi-tenant du RAG : on transmet l'identité + les
+            # ressources autorisées par OpenWebUI pour ce chat. L'agent rag s'en
+            # sert pour filtrer Qdrant (cf. tools/rag_client.search).
+            "_owui": _extract_owui_context(body),
         }
 
         # 2. Lancer la coroutine graphe+synthèse et lire les tokens depuis la queue

@@ -42,14 +42,24 @@ async def search(
     query_text: str,
     collection: str,
     top_k: int = 5,
+    tenant_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Recherche des passages similaires dans Qdrant.
 
+    En mode multitenancy OpenWebUI, la collection est partagée entre toutes les
+    bases de connaissances ; chaque point porte un champ payload `tenant_id`
+    valant l'ID de la base. `tenant_ids` restreint la recherche à un sous-ensemble
+    explicitement autorisé pour la conversation courante — c'est ce qui évite
+    les fuites de documents entre utilisateurs.
+
     Args:
         query_text: question ou phrase de recherche
-        collection: nom de la collection Qdrant (ex: "openwebui")
+        collection: nom de la collection Qdrant (ex: "open-webui_knowledge")
         top_k: nombre de résultats à retourner
+        tenant_ids: si fourni, ne renvoie que les points dont `tenant_id` est
+            dans la liste. Si None ou vide, AUCUN filtre n'est appliqué — à
+            réserver aux contextes administrateur (jamais en exposition utilisateur).
 
     Returns:
         Liste de dicts avec 'id', 'score', 'payload' (contient le texte du chunk).
@@ -59,11 +69,20 @@ async def search(
     if _QDRANT_API_KEY:
         headers["api-key"] = _QDRANT_API_KEY
 
+    body: dict[str, Any] = {"vector": vector, "limit": top_k, "with_payload": True}
+    if tenant_ids:
+        body["filter"] = {
+            "must": [{
+                "key": "tenant_id",
+                "match": {"any": list(tenant_ids)},
+            }],
+        }
+
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             f"{_QDRANT_URI}/collections/{collection}/points/search",
             headers=headers,
-            json={"vector": vector, "limit": top_k, "with_payload": True},
+            json=body,
         )
         resp.raise_for_status()
         return resp.json().get("result", [])

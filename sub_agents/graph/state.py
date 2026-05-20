@@ -59,3 +59,9 @@ class AlyxState(TypedDict):
 
     # Config Pollinations injectée par la pipeline (enable, model, width, height, enhance, api_key)
     _pollinations: dict[str, Any]
+
+    # Contexte d'autorisation OpenWebUI injecté par la pipeline pour isoler le RAG
+    # multi-tenant Qdrant. Clés : user_id (str), knowledge_ids (list[str]),
+    # file_ids (list[str]). Source de vérité : le body de la requête OpenWebUI →
+    # le serveur a déjà validé l'accès de l'utilisateur·rice à ces ressources.
+    _owui: dict[str, Any]
