@@ -197,12 +197,16 @@ def _extract_owui_context(body: dict) -> dict[str, Any]:
     à la conversation. Cf. open-webui/backend/retrieval/vector/dbs/qdrant_multitenancy.py.
 
     Returns:
-        {"user_id": str, "knowledge_ids": list[str], "file_ids": list[str]}
+        {"user_id": str, "chat_id": str, "knowledge_ids": list[str], "file_ids": list[str]}
     """
     user = body.get("user") if isinstance(body, dict) else None
     user_id = ""
     if isinstance(user, dict):
         user_id = str(user.get("id") or "")
+
+    chat_id = ""
+    if isinstance(body, dict):
+        chat_id = str(body.get("chat_id") or body.get("session_id") or "")
 
     raw = body.get("files") if isinstance(body, dict) else None
     if not raw:
@@ -233,6 +237,7 @@ def _extract_owui_context(body: dict) -> dict[str, Any]:
 
     return {
         "user_id": user_id,
+        "chat_id": chat_id,
         "knowledge_ids": knowledge_ids,
         "file_ids": file_ids,
     }

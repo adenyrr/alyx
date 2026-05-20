@@ -1,66 +1,68 @@
 """
-Client Playwright — connexion MCP Streamable HTTP au service playwright.
+Client Playwright — passe par MCPO.
 
-Le service playwright (mcr.microsoft.com/playwright/mcp) expose un serveur MCP
-via le transport Streamable HTTP (POST /) — transport par défaut depuis playwright-mcp v0.0.20.
-L'ancien transport SSE (GET /sse) n'est plus utilisé.
+Le serveur MCP `playwright` (mcr.microsoft.com/playwright/mcp) est lancé par
+MCPO via [mcpo_config.json](../../mcpo_config.json). Aucun service `playwright`
+HTTP autonome n'existe dans compose.yaml : tout transite par MCPO sur
+`http://mcpo:8000/playwright/*`.
 
-Outils principaux :
-  browser_navigate(url)     — navigue vers une URL
-  browser_snapshot()        — retourne l'arbre d'accessibilité de la page courante
-  browser_take_screenshot() — capture d'écran (base64)
+Outils MCP utilisés :
+  browser_navigate(url)  — charge l'URL
+  browser_snapshot()     — arbre d'accessibilité textuel de la page courante
 """
 
 from __future__ import annotations
 
-import os
+from typing import Any
 
-from mcp.client.streamable_http import streamablehttp_client
-from mcp import ClientSession
-
-_PLAYWRIGHT_BASE_URL = os.environ.get(
-    "PLAYWRIGHT_URL", "http://playwright:8931/sse"
-).removesuffix("/sse").removesuffix("/")  # normalise vers http://playwright:8931
-_TIMEOUT = 30  # secondes
+from tools.mcpo_client import call_tool
 
 
-async def fetch_url(url: str) -> str:
+async def fetch_url(url: str, max_chars: int = 4000) -> str:
     """
-    Navigue vers une URL et retourne le contenu textuel (arbre d'accessibilité).
+    Navigue vers une URL via Playwright (MCPO) et retourne le texte de la page.
 
     Args:
-        url: URL complète à charger (ex: 'https://example.com')
+        url: URL complète à charger.
+        max_chars: tronque le résultat à cette longueur (défaut 4000).
 
     Returns:
-        Contenu textuel de la page (max 4000 caractères).
+        Texte extrait de l'arbre d'accessibilité, ou message d'erreur explicite.
     """
-    async with streamablehttp_client(_PLAYWRIGHT_BASE_URL) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            await session.call_tool("browser_navigate", {"url": url})
-            result = await session.call_tool("browser_snapshot", {})
-            return _extract_text(result)
+    try:
+        await call_tool("playwright", "browser_navigate", {"url": url})
+        snapshot = await call_tool("playwright", "browser_snapshot", {})
+    except Exception as exc:
+        return f"(playwright unavailable: {exc})"
+
+    text = _extract_text(snapshot)
+    return text[:max_chars] if text else "(empty page)"
 
 
-async def search_web(query: str) -> str:
-    """
-    Effectue une recherche DuckDuckGo et retourne les résultats.
-
-    Args:
-        query: termes de recherche
-
-    Returns:
-        Contenu textuel de la page de résultats DuckDuckGo.
-    """
-    search_url = f"https://duckduckgo.com/?q={query.replace(' ', '+')}&ia=web"
-    return await fetch_url(search_url)
-
-
-def _extract_text(result) -> str:
-    """Extrait le texte brut d'un résultat de tool MCP."""
-    text = ""
-    if result and hasattr(result, "content") and result.content:
-        for item in result.content:
-            if hasattr(item, "text"):
-                text += item.text
-    return text[:4000] if text else "(empty page)"
+def _extract_text(payload: Any) -> str:
+    """Aplati la réponse MCPO d'un tool MCP en texte brut."""
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        # Format MCP standard : {"content": [{"type": "text", "text": "..."}, ...]}
+        content = payload.get("content")
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    txt = item.get("text") or item.get("data") or ""
+                    if isinstance(txt, str) and txt:
+                        parts.append(txt)
+            if parts:
+                return "\n".join(parts)
+        # Fallback : champs textuels usuels
+        for key in ("text", "result", "snapshot", "body"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(payload, list):
+        parts = [_extract_text(item) for item in payload]
+        return "\n".join(p for p in parts if p)
+    return ""

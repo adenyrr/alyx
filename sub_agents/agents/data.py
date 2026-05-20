@@ -92,15 +92,6 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         except Exception as exc:
             context_parts.append(f"## Yahoo Finance failed ({ticker})\n{exc}")
 
-    # Yahoo Finance si ticker/action détecté
-    ticker = _extract_ticker(user_text)
-    if ticker:
-        try:
-            result = await call_tool("yahoo-finance", "get_stock_info", {"symbol": ticker})
-            context_parts.append(f"## Yahoo Finance ({ticker})\n{json.dumps(result, ensure_ascii=False, indent=2)[:3000]}")
-        except Exception as exc:
-            context_parts.append(f"## Yahoo Finance failed ({ticker})\n{exc}")
-
     context = "\n\n".join(context_parts)
     llm = ChatOpenAI(
         model=model or _MODEL,
@@ -139,16 +130,47 @@ def _extract_math_expression(text: str) -> str:
     return ""
 
 
-def _extract_ticker(text: str) -> str:
-    """Détecte un ticker boursier (ex: AAPL, BTC-USD, ^GSPC) dans le texte."""
-    m = re.search(r"\b([A-Z]{1,5}(?:-[A-Z]{2,4})?|\^[A-Z]+)\b", text)
-    return m.group(1) if m else ""
+# Faux positifs à exclure : mots courants en MAJUSCULES, codes pays/devises,
+# acronymes techniques. Les vrais tickers passent par un cue explicite (cf. _extract_ticker).
+_TICKER_BLACKLIST: frozenset[str] = frozenset({
+    "I", "A", "AI", "ML", "API", "CEO", "CFO", "CTO", "CV", "DNS", "DOI",
+    "EUR", "USD", "GBP", "CHF", "JPY", "CNY",
+    "FR", "US", "UK", "EU", "UN", "OK", "TV", "PC", "HTML", "JSON", "CSV",
+    "PDF", "URL", "HTTP", "SQL", "GPS", "RAM", "CPU", "GPU", "OS", "IT",
+    "SaaS", "B2B", "B2C", "LBO", "MBA", "PME", "TPE", "CDD", "CDI", "RTT",
+})
 
 
 def _extract_ticker(text: str) -> str:
-    """Détecte un ticker boursier (ex: AAPL, BTC-USD, ^GSPC) dans le texte."""
-    m = re.search(r"\b([A-Z]{1,5}(?:-[A-Z]{2,4})?)\b", text)
-    return m.group(1) if m else ""
+    """
+    Détecte un ticker boursier (ex: AAPL, BTC-USD, ^GSPC) dans le texte.
+
+    Exige un cue contextuel (`$AAPL`, `ticker:`, "action/cours/stock/price"…)
+    pour éviter les faux positifs sur des acronymes courants ("EUR", "PDF", "AI"…).
+    """
+    # Format $TICKER ou ^INDEX — non ambigu
+    m = re.search(r"(?:\$|\^)([A-Z]{1,5}(?:-[A-Z]{2,4})?)\b", text)
+    if m:
+        return m.group(1)
+
+    # Crypto explicite (BTC-USD, ETH-EUR…) — toujours avec un tiret
+    m = re.search(r"\b([A-Z]{2,5}-[A-Z]{3,4})\b", text)
+    if m:
+        return m.group(1)
+
+    # Sinon : exiger un mot-clé financier dans la phrase pour interpréter un
+    # token MAJUSCULE comme un ticker
+    cue_re = re.compile(
+        r"\b(ticker|stock|action|cours|cotation|bourse|nasdaq|nyse|share|quote|price)\b",
+        re.IGNORECASE,
+    )
+    if not cue_re.search(text):
+        return ""
+
+    for candidate in re.findall(r"\b([A-Z]{2,5})\b", text):
+        if candidate not in _TICKER_BLACKLIST:
+            return candidate
+    return ""
 
 
 def _extract_sql_query(text: str) -> str:
