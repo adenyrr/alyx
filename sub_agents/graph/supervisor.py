@@ -123,6 +123,26 @@ RULE 10b — WRITER COMBINATIONS:
   Use writer ALONE when the user gives all the facts in the message.
   Use writer in phase 2 when facts must be fetched first (doc, web, data, reasoning).
 
+RULE 10c — FILE FORMAT TRIGGERS WRITER (CRITICAL):
+  ANY mention of a target file format in the user message MUST trigger writer (alone
+  or as phase 2 of a sequential workflow). The writer agent is the ONLY component
+  wired to the pandoc MCP server — without writer in the routing, no file conversion
+  happens and the conversation degrades to "I can't generate DOCX" excuses.
+  File-format trigger keywords (any language): ".docx", ".odt", ".epub", ".tex",
+  ".rtf", ".html" (when document, not page), "format Word/DOCX/EPUB/LaTeX",
+  "fichier Word", "as PDF/DOCX/EPUB", "en DOCX/LaTeX/EPUB/RTF/Word", "document Word".
+  Routing pattern when factual research is also needed:
+    "Synthèse Hantavirus en docx" → {"routing": ["doc"], "routing_next": ["writer"]}
+    "Compile la météo des 5 capitales en .docx" → {"routing": ["geo"], "routing_next": ["writer"]}
+    "Rapport sur Bitcoin en format Word" → {"routing": ["data"], "routing_next": ["writer"]}
+    "Article LinkedIn sur l'IA en .epub" → {"routing": ["web", "wikipedia"], "routing_next": ["writer"]}
+  Routing pattern when no research is needed:
+    "Convertis ce CV en .docx" → ["writer"]
+    "Génère-moi un .docx vide structuré pour un rapport business" → ["writer"]
+  NEVER omit writer when a file format is mentioned. NEVER route only to a research
+  agent (doc/data/web/wiki) when the user asks for a specific file format — the
+  research output won't be wrapped in a downloadable document.
+
 RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   When task B genuinely CANNOT run without task A's output, use JSON object format:
     {"routing": ["<phase1_agents>"], "routing_next": ["<phase2_agents>"]}
