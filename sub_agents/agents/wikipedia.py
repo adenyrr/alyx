@@ -79,11 +79,24 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     _completion_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
 
     # 2. Recherche Wikipedia via MCPO
+    # wikipedia-mcp expose `search_wikipedia` (pas `search`) + `get_summary`.
+    # On enchaîne : search → top 3 titres → résumés courts → synthèse.
     wiki_raw = ""
     try:
         await _emit(f"📖 Recherche Wikipédia : {keywords}")
-        result = await call_tool("wikipedia", "search", {"query": keywords, "limit": 3})
-        wiki_raw = json.dumps(result, ensure_ascii=False, indent=2)[:6000]
+        search_result = await call_tool("wikipedia", "search_wikipedia", {"query": keywords, "limit": 3})
+        titles = _extract_titles(search_result)
+        summaries: list[str] = []
+        if titles:
+            await _emit(f"📄 Résumés des {len(titles)} article(s)…")
+            for title in titles:
+                try:
+                    summary = await call_tool("wikipedia", "get_summary", {"title": title})
+                    summaries.append(f"### {title}\n{json.dumps(summary, ensure_ascii=False)[:1500]}")
+                except Exception:
+                    continue
+        wiki_payload = {"search": search_result, "summaries": summaries}
+        wiki_raw = json.dumps(wiki_payload, ensure_ascii=False, indent=2)[:6000]
     except Exception as exc:
         wiki_raw = f"Wikipedia indisponible : {exc}"
 
@@ -109,6 +122,30 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             "model": model or _MODEL,
         }},
     }
+
+
+def _extract_titles(search_payload) -> list[str]:
+    """Extrait les titres d'articles depuis la réponse `search_wikipedia`.
+
+    Le format peut varier selon la version : dict avec `results: [{title, snippet, ...}]`,
+    liste plate, ou enveloppe MCP `{content: [{text: "..."}]}`. On gère les cas
+    courants et on s'arrête au premier qui marche."""
+    if isinstance(search_payload, dict):
+        # Enveloppe MCPO standard
+        content = search_payload.get("content")
+        if isinstance(content, list) and content:
+            try:
+                inner = json.loads(content[0].get("text", ""))
+                return _extract_titles(inner)
+            except Exception:
+                pass
+        for key in ("results", "items", "articles"):
+            items = search_payload.get(key)
+            if isinstance(items, list):
+                return [str(it.get("title", "")).strip() for it in items if isinstance(it, dict) and it.get("title")][:3]
+    if isinstance(search_payload, list):
+        return [str(it.get("title", "")).strip() for it in search_payload if isinstance(it, dict) and it.get("title")][:3]
+    return []
 
 
 def _last_user_message(messages: list) -> str:

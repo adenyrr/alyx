@@ -138,11 +138,16 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             "## Methodological skills (apply these conventions to your output)\n" + skill_block
         )
 
-    # 2. Plan de recherche via sequential-thinking
+    # 2. Plan de recherche via sequential-thinking.
+    # Le MCP @modelcontextprotocol/server-sequential-thinking exige TOUS les
+    # champs (thoughtNumber/totalThoughts/nextThoughtNeeded) — sinon 422.
     await _emit("🧩 Plan de recherche…")
     try:
         seq_result = await call_tool("sequential-thinking", "sequentialthinking", {
-            "thought": f"Research plan for: {keywords}"
+            "thought": f"Research plan for: {keywords}",
+            "thoughtNumber": 1,
+            "totalThoughts": 1,
+            "nextThoughtNeeded": False,
         })
         seq_str = json.dumps(seq_result, ensure_ascii=False, indent=2)
         context_parts.append(

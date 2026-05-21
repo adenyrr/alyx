@@ -14,7 +14,7 @@
     },
 
     "memory": {
-      "_comment": "MULTI-USER",
+      "_comment": "Knowledge graph JSON partagé entre tous les utilisateur·rices ; l'isolation est faite côté agent (memory_agent.py) via préfixe d'entité user-{user_id}. Ne JAMAIS exposer ce MCP à un agent qui n'applique pas le filtre.",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-memory"],
       "env": {
@@ -23,15 +23,15 @@
     },
 
     "sequential-thinking": {
-      "_comment": "Décomposition de problèmes complexes en étapes. Améliore les raisonnements cliniques, diagnostics différentiels, plans de recherche.",
+      "_comment": "Décomposition de problèmes complexes en étapes. Le tool `sequentialthinking` exige TOUS les champs: thought, thoughtNumber, totalThoughts, nextThoughtNeeded (sinon 422).",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
     },
 
     "wikipedia": {
-      "_comment": "Recherche Wikipedia multi-langue avec caching.",
+      "_comment": "Recherche Wikipedia multi-langue avec caching. Tools: search_wikipedia(query, limit), get_summary(title), get_article(title), get_sections(title)…",
       "command": "uvx",
-        "args": ["wikipedia-mcp", "--language", "fr", "--enable-cache"]
+      "args": ["wikipedia-mcp", "--language", "fr", "--enable-cache"]
     },
 
     "youtube-transcript": {
@@ -53,7 +53,7 @@
     },
 
     "pandoc": {
-      "_comment": "Conversion de documents : Markdown ↔ DOCX ↔ LaTeX ↔ HTML ↔ EPUB. Indispensable pour la rédaction académique.",
+      "_comment": "Conversion Markdown ↔ DOCX ↔ LaTeX ↔ HTML ↔ EPUB ↔ ODT ↔ RTF. Tool: convert-contents(contents, input_format, output_format). Utilisé par l'agent writer pour la sortie au format demandé.",
       "command": "uvx",
       "args": ["mcp-pandoc"]
     },
@@ -65,20 +65,21 @@
     },
 
     "yahoo-finance": {
+      "_comment": "Données financières. Tools: get_current_stock_price(symbol), get_news(symbol), get_recommendations(symbol), get_historical_stock_prices(symbol, period, interval), get_dividends, get_income_statement, get_cashflow, etc. PAS de get_stock_info.",
       "command": "uvx",
       "args": ["mcp-yahoo-finance"]
     },
 
     "fetch-web": {
-      "_comment": "Récupération et indexation web (fetch web).",
+      "_comment": "Récupération web (Anthropic mcp-server-fetch). `--ignore-robots-txt` autorise les domaines qui bloquent les bots (ex: sci-hub) — sinon tout fetch sur ces sites échoue en 500 avec 'Failed to fetch robots.txt'.",
       "command": "uvx",
-      "args": ["mcp-server-fetch"]
+      "args": ["mcp-server-fetch", "--ignore-robots-txt"]
     },
 
     "playwright": {
-      "_comment": "Automatisation de navigateurs avec Playwright (Microsoft).",
-      "command": "uvx",
-      "args": ["mcp-playwright"]
+      "_comment": "Playwright MCP OFFICIEL Microsoft (@playwright/mcp). Le package PyPI mcp-playwright est un fork tiers avec d'autres noms de tools (navigate_to_url, get_text_content) — incompatible avec playwright_client.py qui appelle browser_navigate / browser_snapshot.",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
     },
 
     "duckduckgo": {
@@ -88,28 +89,29 @@
       "env": {
         "DDG_SAFE_SEARCH": "OFF",
         "DDG_REGION": "be-fr"
-  }
+      }
     },
 
     "openmeteo": {
+      "_comment": "Données météo Open-Meteo (gratuit, sans clé). Tools: get_forecast(latitude, longitude, forecast_days), get_current_weather(latitude, longitude).",
       "command": "npx",
       "args": ["-y", "-p", "open-meteo-mcp-server", "open-meteo-mcp-server"]
     },
 
     "osm-mcp-server": {
-      "_comment": "Accès aux données OpenStreetMap via un MCP serveur OSM.",
+      "_comment": "Accès aux données OpenStreetMap via un MCP serveur OSM. Tools: geocode(q, limit), reverse_geocode(lat, lon)…",
       "command": "uvx",
       "args": ["osm-mcp-server"]
     },
 
     "context7": {
-      "_comment": "Client Context7 via npx — nécessite clé API dans l'environnement.",vscode-webview://05eqmplujki9ekpr1nnh39cn9jnrutmo1oadho8rm2bm0eipfe5q/index.html?id=8759c1e1-b381-4c23-abac-cf9ed869351c&parentId=1&origin=8d7cc593-3d7e-4184-b045-7e68f852d665&swVersion=5&extensionId=Anthropic.claude-code&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=webviewView&session=4b6bf606-6f8c-45c5-83a5-715451c2f43f#
+      "_comment": "Client Context7 — docs officielles des bibliothèques en temps réel. Nécessite CONTEXT7_API_KEY.",
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp", "--api-key", "${CONTEXT7_API_KEY}"]
     },
 
     "calculator": {
-      "_comment": "Évaluation d'expressions mathématiques (bibliothèque math Python complète).",
+      "_comment": "Évaluation d'expressions mathématiques (bibliothèque math Python complète). Tool: evaluate(expression).",
       "command": "uvx",
       "args": ["mcp-server-calculator"]
     }

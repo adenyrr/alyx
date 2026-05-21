@@ -91,15 +91,27 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         except Exception as exc:
             context_parts.append(f"## DuckDB failed\n{exc}")
 
-    # Yahoo Finance si ticker/action détecté
+    # Yahoo Finance si ticker/action détecté.
+    # mcp-yahoo-finance expose : get_current_stock_price / get_news /
+    # get_recommendations / get_historical_stock_prices / get_dividends / etc.
+    # (pas de `get_stock_info`). On compose un mini-bundle pour le LLM.
     ticker = _extract_ticker(user_text)
     if ticker:
-        try:
-            await _emit(f"📈 Données financières : {ticker}")
-            result = await call_tool("yahoo-finance", "get_stock_info", {"symbol": ticker})
-            context_parts.append(f"## Yahoo Finance ({ticker})\n{json.dumps(result, ensure_ascii=False, indent=2)[:3000]}")
-        except Exception as exc:
-            context_parts.append(f"## Yahoo Finance failed ({ticker})\n{exc}")
+        await _emit(f"📈 Données financières : {ticker}")
+        finance_blocks: list[str] = []
+        for tool, label, args in (
+            ("get_current_stock_price", "current price", {"symbol": ticker}),
+            ("get_news",                "recent news",   {"symbol": ticker}),
+            ("get_recommendations",     "analyst recs",  {"symbol": ticker}),
+        ):
+            try:
+                result = await call_tool("yahoo-finance", tool, args)
+                finance_blocks.append(
+                    f"### {label}\n```\n{json.dumps(result, ensure_ascii=False, indent=2)[:1500]}\n```"
+                )
+            except Exception as exc:
+                finance_blocks.append(f"### {label}\n(unavailable: {exc})")
+        context_parts.append(f"## Yahoo Finance ({ticker})\n" + "\n\n".join(finance_blocks))
 
     context = "\n\n".join(context_parts)
     llm = ChatOpenAI(
