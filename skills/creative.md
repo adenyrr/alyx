@@ -1,6 +1,7 @@
 ---
 name: creative-artifacts
 description: Build rich, polished, interactive HTML and React artifacts with exceptional visual quality and creative ambition. This is the **master orchestration skill** — it defines how to encapsulate and present any artifact, which design rules apply universally, which libraries are available, and which specialist skill to reach for. Use this skill for any request involving an interactive web component, mini-application, game, tool, calculator, simulator, generative art piece, animated visualisation, creative UI, dashboard widget, or any deliverable that lives in the browser and benefits from interactivity, animation, or a distinct visual identity. Trigger on requests like "build me a…", "create an interactive…", "make a…tool/game/component/app/widget/demo", or any prompt where the output should feel designed and alive rather than static. Always ask "what would make this feel polished and memorable?" before writing a single line. The default bar is high.
+agents: [dev]
 ---
 
 # Creative Artifacts — Master Skill
@@ -262,7 +263,7 @@ import { Search, Star, Heart, ArrowRight, ChevronDown, X, Menu, Check,
          ChevronLeft, ChevronRight, ExternalLink, Info, Zap } from "lucide-react";
 
 // ── 3D & AUDIO ─────────────────────────────────────────────
-import * as THREE from "three";   // r128 — no CapsuleGeometry, no OrbitControls via import
+import * as THREE from "three";   // r183 in HTML via importmap; React sandbox is r128 — no CapsuleGeometry, no OrbitControls via import
 import * as Tone from "tone";
 
 // ── CANVAS & CALENDAR ──────────────────────────────────────
@@ -316,11 +317,11 @@ Many libraries are async or need the DOM to be fully rendered. Always follow thi
 
 ## Step 7 — Universal Design System
 
-Apply these tokens consistently across every artifact. Do not use browser defaults.
+Apply these tokens consistently across every artifact. Do not use browser defaults. Dark is the default; ship a light token set in parallel so artifacts can respond to `prefers-color-scheme` or a `[data-theme="light"]` switch.
 
-### Colour palette
+### Colour palette — dark (default)
 ```css
-/* ── Surfaces (dark theme) ────────────────────────────── */
+/* ── Surfaces ──────────────────────────────────────────── */
 --bg-deep:      #0f1117   /* body / page background */
 --bg-surface:   #1a1d27   /* card / panel */
 --bg-elevated:  #1e2130   /* tooltip, dropdown, header */
@@ -337,7 +338,7 @@ Apply these tokens consistently across every artifact. Do not use browser defaul
 --text-muted:   #94a3b8   /* labels, captions */
 --text-faint:   #475569   /* placeholder, disabled */
 
-/* ── Brand accent palette ─────────────────────────────── */
+/* ── Brand accent palette (theme-agnostic) ────────────── */
 --indigo:   #6366f1    --indigo-light: #818cf8   --indigo-dim: rgba(99,102,241,0.15)
 --violet:   #8b5cf6    --pink:         #ec4899
 --cyan:     #06b6d4    --teal:         #14b8a6
@@ -345,6 +346,37 @@ Apply these tokens consistently across every artifact. Do not use browser defaul
 --orange:   #f97316    --red:          #f43f5e
 --blue:     #3b82f6
 ```
+
+### Colour palette — light
+```css
+[data-theme="light"] {
+  --bg-deep:     #f8fafc;
+  --bg-surface:  #ffffff;
+  --bg-elevated: #f1f5f9;
+  --bg-overlay:  rgba(248,250,252,0.8);
+
+  --border:       rgba(0,0,0,0.08);
+  --border-hover: rgba(0,0,0,0.16);
+  --border-focus: rgba(99,102,241,0.5);
+
+  --text-primary: #0f172a;
+  --text-body:    #1e293b;
+  --text-muted:   #475569;
+  --text-faint:   #94a3b8;
+}
+
+/* Automatic via OS preference when no explicit data-theme is set */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg-deep: #f8fafc; --bg-surface: #ffffff; --bg-elevated: #f1f5f9;
+    --border: rgba(0,0,0,0.08); --text-primary: #0f172a;
+    --text-body: #1e293b; --text-muted: #475569;
+  }
+}
+```
+
+### Theme-switch pattern
+For HTML artifacts, persist nothing (no `localStorage` in the React sandbox) — keep theme as in-memory state or read from `prefers-color-scheme` on init. Flip `document.documentElement.dataset.theme` to override. After switching, rebroadcast to charting libraries (Chart.defaults.color, Plotly relayout, mermaid theme directive, vis-network options).
 
 ### Typography scale
 ```css
@@ -628,17 +660,24 @@ Before delivering any artifact:
 - [ ] Libraries load before app script
 - [ ] Container has explicit height if required by the library
 - [ ] `const { ... } = libraryGlobal` destructuring at top of script (not inline)
+- [ ] `URL.revokeObjectURL(url)` called after any `URL.createObjectURL(blob)` to avoid leaking blob memory
 
 **Design**
-- [ ] Dark theme applied (`#0f1117` background, design system tokens used)
+- [ ] Dark theme tokens applied by default; **light theme tokens also defined** so the artifact responds to `prefers-color-scheme` or `[data-theme="light"]`
 - [ ] Content wrapped in a card or equivalent — not bare on `<body>`
 - [ ] Title + subtitle + interaction hint present
 - [ ] Typography hierarchy is clear: heading > body > caption
-- [ ] Sufficient contrast (≥ 4.5:1 body text, ≥ 3:1 large text)
+- [ ] Sufficient contrast (≥ 4.5:1 body text, ≥ 3:1 large/UI text) in **both themes**
 - [ ] Hover/active states on every interactive element
 - [ ] Spacing follows 8px grid
 - [ ] Responsive (no overflow or breakage on narrow viewport)
 - [ ] No raw `<form>` tags (React) — use event handlers
+
+**Accessibility**
+- [ ] `aria-label` / `role` set on canvas charts, maps, graphs, custom widgets
+- [ ] Keyboard reachable: every interactive element receives focus and has a visible `:focus-visible` outline
+- [ ] `prefers-reduced-motion` respected for non-essential animation (gate with `matchMedia`)
+- [ ] User-supplied strings rendered with `textContent` (or sanitised via DOMPurify) — never `innerHTML`
 
 **Delight**
 - [ ] At least one meaningful entrance animation or transition
@@ -663,3 +702,16 @@ Before delivering any artifact:
 The question to ask before finalising: *"Would I be proud to show this to someone?"*
 
 If the answer is "it works but looks generic", it's not done yet.
+
+---
+
+## Common Mistakes to Avoid
+
+- **Shipping only a dark palette** — define both dark and light token sets; respect `prefers-color-scheme` or expose `[data-theme]` so users in light-mode OSes see a usable page
+- **Hard-coding pixel widths instead of `max-width`** — the artifact may be embedded inside narrower iframes or popups; always cap at `max-width: 100%` and use `vw` / `clamp()` for hero text
+- **Animating without honouring `prefers-reduced-motion`** — entrance staggers, parallax, and auto-play loops can cause vestibular distress; gate them with `matchMedia('(prefers-reduced-motion: reduce)')`
+- **Setting `innerHTML` from user input or fetched data** — opens XSS via injected `<script>` or `onerror` attributes. Prefer `textContent`, build elements with `createElement`, or sanitise with DOMPurify
+- **Leaking blob URLs** — every `URL.createObjectURL(blob)` must be paired with `URL.revokeObjectURL(url)` once the download click fires (or on unmount); otherwise the blob stays in memory for the page lifetime
+- **Using `var` in copy-pasted snippets** — prefer `const` (or `let` when reassigned); `var` hoists and leaks across blocks, often causing subtle bugs in loops with closures
+- **Suppressing focus outlines** — never `outline: none` without a `:focus-visible` replacement; keyboard users will be unable to see where they are
+- **No `crossorigin` on third-party scripts loaded from CDNs** — add `crossorigin="anonymous"` so SRI / proper CORS error reporting works, and so the browser can use the cached resource across origins

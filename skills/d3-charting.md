@@ -1,6 +1,7 @@
 ---
 name: d3-charting
 description: Create advanced, fully custom data visualizations using D3.js v7, delivered as self-contained HTML artifacts. Use this skill whenever someone needs bespoke SVG charts, force-directed network graphs, geographic maps, hierarchical layouts (treemap, sunburst, pack), animated transitions, interactive brushing/zooming, or any visualization that goes beyond standard chart types. Trigger whenever the user mentions D3.js directly, OR when the request implies pixel-perfect control, unusual chart types (chord diagrams, voronoi, streamgraph, ridgeline, custom radial charts), or rich interaction patterns (drag, lasso, linked views). Prefer this skill over generic charting tools for any visualization requiring custom SVG drawing or physics simulation.
+agents: [dev]
 ---
 
 # D3.js Charting Skill — v7
@@ -130,18 +131,37 @@ D3 renders into an **SVG element**. The SVG must be sized and positioned correct
       opacity: 0;
       transition: opacity 0.15s;
     }
+
+    /* Light theme overrides — kicks in automatically on light OSes, or via [data-theme="light"] */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) body { background: #f8fafc; color: #1e293b; }
+      :root:not([data-theme="dark"]) .chart-wrapper { background: #ffffff; box-shadow: 0 8px 40px rgba(15,23,42,0.08); }
+      :root:not([data-theme="dark"]) h1 { color: #0f172a; }
+      :root:not([data-theme="dark"]) .axis path, :root:not([data-theme="dark"]) .axis line { stroke: rgba(0,0,0,0.12); }
+      :root:not([data-theme="dark"]) .axis text { fill: #475569; }
+      :root:not([data-theme="dark"]) .tooltip { background: #ffffff; color: #1e293b; border-color: rgba(0,0,0,0.10); }
+    }
+    [data-theme="light"] body { background: #f8fafc; color: #1e293b; }
+    [data-theme="light"] .chart-wrapper { background: #ffffff; box-shadow: 0 8px 40px rgba(15,23,42,0.08); }
+    [data-theme="light"] .axis path, [data-theme="light"] .axis line { stroke: rgba(0,0,0,0.12); }
+    [data-theme="light"] .axis text { fill: #475569; }
+    [data-theme="light"] .tooltip { background: #ffffff; color: #1e293b; border-color: rgba(0,0,0,0.10); }
+
+    /* Always-visible focus ring on interactive SVG elements */
+    .bar:focus, circle:focus, path:focus { outline: 2px solid #6366f1; outline-offset: 2px; }
   </style>
 </head>
 <body>
   <div class="chart-wrapper">
     <h1>Chart Title</h1>
     <p class="sub">Subtitle or data source</p>
-    <div id="chart"></div>
+    <!-- role="img" + descriptive aria-label so screen readers understand the chart -->
+    <div id="chart" role="img" aria-label="Describe what the chart shows in one sentence"></div>
   </div>
   <!-- Tooltip lives at body level so it can overflow the container -->
-  <div class="tooltip" id="tooltip"></div>
+  <div class="tooltip" id="tooltip" role="status" aria-live="polite"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7" crossorigin="anonymous"></script>
   <script>
     // All D3 code here
   </script>
@@ -645,20 +665,43 @@ d3.interpolateRgb('#6366f1', '#ec4899')(0.5)  // midpoint color
 
 ```html
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>D3 Bar Chart</title>
   <style>
+    :root, [data-theme="dark"] {
+      --bg: #0f1117; --card: #1a1d27; --border: rgba(255,255,255,0.08);
+      --grid: rgba(255,255,255,0.06); --text: #e2e8f0; --heading: #f1f5f9;
+      --muted: #94a3b8; --subtle: #64748b; --accent: #6366f1;
+      --accent-2: #4338ca; --accent-3: #818cf8;
+      --tip-bg: #1e293b; --shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+      --grid: rgba(15,23,42,0.08); --text: #1e293b; --heading: #0f172a;
+      --muted: #475569; --subtle: #64748b; --accent: #6366f1;
+      --accent-2: #6366f1; --accent-3: #a5b4fc;
+      --tip-bg: #ffffff; --shadow: 0 8px 40px rgba(15,23,42,0.08);
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme]) {
+        --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+        --grid: rgba(15,23,42,0.08); --text: #1e293b; --heading: #0f172a;
+        --muted: #475569; --accent-2: #6366f1; --accent-3: #a5b4fc;
+        --tip-bg: #ffffff; --shadow: 0 8px 40px rgba(15,23,42,0.08);
+      }
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
-    .card { background: #1a1d27; border-radius: 16px; padding: 32px; width: 100%; max-width: 860px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
-    h1 { font-size: 1.2rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
-    .axis path, .axis line { stroke: rgba(255,255,255,0.08); }
-    .axis text { fill: #94a3b8; font-size: 12px; }
-    .tooltip { position: absolute; background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 14px; font-size: 13px; color: #f1f5f9; pointer-events: none; opacity: 0; transition: opacity 0.12s; line-height: 1.6; }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; transition: background 200ms, color 200ms; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 32px; width: 100%; max-width: 860px; box-shadow: var(--shadow); }
+    h1 { font-size: 1.2rem; font-weight: 600; color: var(--heading); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--subtle); margin-bottom: 20px; }
+    .axis path, .axis line { stroke: var(--border); }
+    .axis text { fill: var(--muted); font-size: 12px; }
+    .tooltip { position: absolute; background: var(--tip-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; font-size: 13px; color: var(--heading); pointer-events: none; opacity: 0; transition: opacity 0.12s; line-height: 1.6; }
   </style>
 </head>
 <body>
@@ -671,6 +714,18 @@ d3.interpolateRgb('#6366f1', '#ec4899')(0.5)  // midpoint color
 
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <script>
+    // Read live theme tokens once so SVG attributes match dark/light.
+    // (D3 sets attrs, not classes, so colours must be values, not vars.)
+    const css = getComputedStyle(document.documentElement);
+    const COLORS = {
+      text:    css.getPropertyValue('--text').trim()     || '#e2e8f0',
+      muted:   css.getPropertyValue('--muted').trim()    || '#94a3b8',
+      grid:    css.getPropertyValue('--grid').trim()     || 'rgba(255,255,255,0.06)',
+      accent:  css.getPropertyValue('--accent').trim()   || '#6366f1',
+      accent2: css.getPropertyValue('--accent-2').trim() || '#4338ca',
+      accent3: css.getPropertyValue('--accent-3').trim() || '#818cf8',
+    };
+
     const data = [
       { month: 'Jan', value: 42000 }, { month: 'Feb', value: 55000 },
       { month: 'Mar', value: 48000 }, { month: 'Apr', value: 70000 },
@@ -704,10 +759,10 @@ d3.interpolateRgb('#6366f1', '#ec4899')(0.5)  // midpoint color
     svg.append('g').attr('class', 'axis')
       .call(d3.axisLeft(y).ticks(5).tickFormat(d => `$${d3.format('.2s')(d)}`).tickSize(-width).tickPadding(10))
       .call(g => g.select('.domain').remove())
-      .call(g => g.selectAll('.tick line').attr('stroke', 'rgba(255,255,255,0.06)'));
+      .call(g => g.selectAll('.tick line').attr('stroke', COLORS.grid));
 
-    // Color gradient via scaleSequential
-    const color = d3.scaleSequential(d3.interpolate('#4338ca', '#818cf8'))
+    // Color gradient via scaleSequential (theme-aware endpoints)
+    const color = d3.scaleSequential(d3.interpolate(COLORS.accent2, COLORS.accent3))
       .domain([0, data.length - 1]);
 
     const tooltip = d3.select('#tooltip');
@@ -766,3 +821,6 @@ d3.interpolateRgb('#6366f1', '#ec4899')(0.5)  // midpoint color
 - **Appending SVG to an already-SVG selection**: always `.select('#chart')` on a `<div>`, then `.append('svg')` — double-SVG nesting breaks layout
 - **Hardcoded dimensions**: use `container.clientWidth` for width and compute height from it for fluid layouts
 - **`d3.event` removed in v7**: use the `event` parameter from the callback — `d3.event` no longer exists
+- **No accessible label on the SVG container**: assistive tech ignores raw SVG; wrap with `role="img"` + `aria-label`, and consider an SVG `<title>` child element summarising the data
+- **Theme baked into JS literals**: hard-coded `#94a3b8` axis fills break light mode. Drive colours from CSS variables (`var(--axis-text)`) or read `getComputedStyle(document.documentElement)` once at startup
+- **Tooltip set via `innerHTML` of untrusted data**: if `d.label` is user-supplied, swap to `.text()` or sanitise — D3's `.html()` injects raw markup

@@ -1,6 +1,7 @@
 ---
 name: vis-network
 description: Create interactive network and graph visualizations using vis-network, delivered as self-contained HTML artifacts. Use this skill whenever someone needs to display nodes and edges, relationship graphs, dependency trees, organizational charts, knowledge graphs, flow diagrams, social networks, infrastructure maps, or any visualization where entities are connected by links. Trigger on requests mentioning network graphs, node-link diagrams, force-directed graphs, topology maps, relationship maps, org charts, or any mention of "nodes and edges". Prefer this skill for its built-in physics engine, clustering, and rich interaction over D3 force simulations when ease of use matters more than pixel-level customization.
+agents: [dev]
 ---
 
 # vis-network Skill
@@ -54,7 +55,7 @@ An interactive graph: drag nodes to rearrange, scroll to zoom, hover for tooltip
 
 ```html
 <!-- Standalone: CSS is auto-injected — only one script tag needed -->
-<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 ```
 
 The standalone build bundles all dependencies and auto-injects its CSS. Use it for all single-file artifacts. The `vis` global is available after loading.
@@ -74,49 +75,89 @@ The network container **must have an explicit width and height** — it renders 
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Network Graph</title>
-  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
   <style>
+    :root {
+      --bg:       #0f1117;
+      --card:     #1a1d27;
+      --canvas:   #161923;
+      --border:   rgba(255,255,255,0.08);
+      --text:     #e2e8f0;
+      --title:    #f1f5f9;
+      --muted:    #64748b;
+      --node-bg:  rgba(99,102,241,0.3);
+      --node-bdr: #6366f1;
+      --node-fg:  #e2e8f0;
+      --edge:     rgba(148,163,184,0.3);
+      --edge-fg:  #64748b;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff; --canvas: #f1f5f9;
+        --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --title: #0f172a; --muted: #475569;
+        --node-bg: rgba(99,102,241,0.15);
+        --node-bdr: #6366f1;
+        --node-fg: #1e293b;
+        --edge: rgba(71,85,105,0.4);
+        --edge-fg: #475569;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff; --canvas: #f1f5f9;
+      --border: rgba(0,0,0,0.08);
+      --text: #1e293b; --title: #0f172a; --muted: #475569;
+      --node-bg: rgba(99,102,241,0.15);
+      --node-bdr: #6366f1; --node-fg: #1e293b;
+      --edge: rgba(71,85,105,0.4); --edge-fg: #475569;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 24px;
+      background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 100vh; padding: 24px;
     }
     .card {
-      background: #1a1d27;
-      border-radius: 16px;
-      padding: 32px;
-      width: 100%;
-      max-width: 900px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 32px;
+      width: 100%; max-width: 900px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.15);
     }
-    h1 { font-size: 1.2rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
-
+    h1 { font-size: 1.2rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--muted); margin-bottom: 20px; }
     /* Canvas container: MUST have explicit width + height */
     #network {
-      width: 100%;
-      height: 520px;
+      width: 100%; height: 520px;
       border-radius: 8px;
-      border: 1px solid rgba(255,255,255,0.08);
-      background: #161923;
+      border: 1px solid var(--border);
+      background: var(--canvas);
     }
+    :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Network Graph</h1>
-    <p class="sub">Drag nodes · Scroll to zoom · Click to select</p>
-    <div id="network"></div>
+    <p class="sub">Drag nodes · Scroll to zoom · Click to select · Tab/arrows for keyboard</p>
+    <div id="network" role="img" aria-label="Interactive network graph" tabindex="0"></div>
   </div>
   <script>
-    // All vis-network code here
+    // Read theme tokens for vis-network options (see Step 5)
+    function tokens() {
+      const cs = getComputedStyle(document.documentElement);
+      const g = (n, fb) => (cs.getPropertyValue(n).trim() || fb);
+      return {
+        nodeBg:  g('--node-bg',  'rgba(99,102,241,0.3)'),
+        nodeBdr: g('--node-bdr', '#6366f1'),
+        nodeFg:  g('--node-fg',  '#e2e8f0'),
+        edge:    g('--edge',     'rgba(148,163,184,0.3)'),
+        edgeFg:  g('--edge-fg',  '#64748b'),
+      };
+    }
+    // ...feed `tokens()` into `options.nodes.color`, `options.edges.color`, etc.
+    // To respect prefers-reduced-motion: pass `physics.stabilization.iterations: 0`
+    // and `interaction.dragView: true` but skip layout animations.
   </script>
 </body>
 </html>
@@ -567,7 +608,7 @@ const options = {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Network Graph</title>
-  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
@@ -692,10 +733,13 @@ const options = {
 ## Common Mistakes to Avoid
 
 - **No explicit height on the container** — the `#network` div must have a CSS height; Canvas rendering requires fixed dimensions
+- **Hard-coded dark-only colours** — read `--node-bg`, `--node-bdr`, `--edge` from CSS variables so the graph stays legible on both `[data-theme="light"]` and the dark default
 - **Forgetting `physics: { enabled: false }` with hierarchical layout** — hierarchical + physics fighting each other produces unstable jitter
 - **Node `id` must be unique** — duplicate ids silently corrupt the DataSet; always use unique numeric or string ids
-- **Tooltip (`title` property) is HTML** — sanitize user data to prevent XSS
+- **Tooltip (`title` property) is HTML** — sanitize user data to prevent XSS. Never pass user input directly into `title` without escaping; prefer a `String(...)` wrapper or strip `<` / `>`
 - **Assigning fixed positions without disabling physics** — set `physics: false` on a per-node basis or globally when using `x`/`y`, or physics will fight the fixed positions
 - **Updating opacity via color object** — `opacity` is a top-level node property, not nested in `color`; to dim nodes use `nodes.update({ id, opacity: 0.2 })`
 - **Not calling `.destroy()`** — the Canvas and all event listeners persist; always call `network.destroy()` on cleanup
+- **Ignoring `prefers-reduced-motion`** — heavy physics simulation animation can trigger motion sickness; set `physics.stabilization.iterations: 0` (or `physics.enabled: false`) when `matchMedia('(prefers-reduced-motion: reduce)').matches`
+- **No `aria-label` / `tabindex` on the network div** — Canvas rendering means screen readers see only "graphic"; set `role="img" aria-label="…" tabindex="0"` and enable `interaction.keyboard = { enabled: true }` for keyboard panning/zooming
 - **Random layout differences between renders** — set `layout.randomSeed` to a fixed number for reproducible initial placement

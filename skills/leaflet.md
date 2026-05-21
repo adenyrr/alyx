@@ -1,6 +1,7 @@
 ---
 name: leaflet-maps
 description: Create beautiful, interactive geographic maps using Leaflet.js v1.9, delivered as self-contained HTML artifacts. Use this skill whenever someone needs to display locations, draw routes or zones, visualize geographic data, build a store locator, map data points by region, show a choropleth, cluster markers, or render any spatial visualization on a real-world map — even without explicit mention of Leaflet. Trigger on requests like "show these locations on a map", "map this data by country", "draw this route", "create a heatmap of these coordinates", "build a store finder", or any request involving latitude/longitude, addresses, countries, or geographic distributions. Do NOT use for abstract network diagrams (→ vis-network), purely schematic flowcharts (→ mermaid-diagrams), or data charts without geographic context (→ charting skill).
+agents: [dev]
 ---
 
 # Leaflet Maps Skill — Interactive Geographic Maps
@@ -120,28 +121,55 @@ Leaflet requires **both** a CSS file and a JS file, loaded in the right order.
     /* REQUIRED: map container must have explicit height */
     #map { width: 100%; height: 520px; }
 
-    /* Leaflet UI dark overrides */
+    /* Leaflet UI dark overrides (default) */
     .leaflet-control-zoom a { background: #1e2130 !important; color: #e2e8f0 !important; border-color: rgba(255,255,255,0.15) !important; }
     .leaflet-control-zoom a:hover { background: #2d3148 !important; }
+    .leaflet-control-zoom a:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
     .leaflet-control-attribution { background: rgba(15,17,23,0.7) !important; color: #475569 !important; }
     .leaflet-control-attribution a { color: #6366f1 !important; }
     .leaflet-popup-content-wrapper { background: #1e2130; color: #e2e8f0; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 20px rgba(0,0,0,0.5); border-radius: 10px; }
     .leaflet-popup-tip { background: #1e2130; }
+
+    /* Light theme — auto via OS preference, or manual via [data-theme="light"] on <html> */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) body { background: #f8fafc; color: #1e293b; }
+      :root:not([data-theme="dark"]) .card { background: #ffffff; box-shadow: 0 8px 40px rgba(15,23,42,0.08); }
+      :root:not([data-theme="dark"]) h1 { color: #0f172a; }
+      :root:not([data-theme="dark"]) .leaflet-control-zoom a { background: #ffffff !important; color: #1e293b !important; border-color: rgba(0,0,0,0.12) !important; }
+      :root:not([data-theme="dark"]) .leaflet-control-zoom a:hover { background: #f1f5f9 !important; }
+      :root:not([data-theme="dark"]) .leaflet-popup-content-wrapper { background: #ffffff; color: #1e293b; border-color: rgba(0,0,0,0.10); }
+      :root:not([data-theme="dark"]) .leaflet-popup-tip { background: #ffffff; }
+      :root:not([data-theme="dark"]) .leaflet-control-attribution { background: rgba(255,255,255,0.85) !important; color: #475569 !important; }
+    }
+    [data-theme="light"] body { background: #f8fafc; color: #1e293b; }
+    [data-theme="light"] .card { background: #ffffff; }
+    [data-theme="light"] .leaflet-control-zoom a { background: #ffffff !important; color: #1e293b !important; border-color: rgba(0,0,0,0.12) !important; }
+    [data-theme="light"] .leaflet-popup-content-wrapper { background: #ffffff; color: #1e293b; border-color: rgba(0,0,0,0.10); }
+    [data-theme="light"] .leaflet-popup-tip { background: #ffffff; }
+
+    /* When using light theme, switch tile provider to CartoDB Positron for legible contrast */
   </style>
 </head>
 <body>
   <div class="card">
     <div class="card-header">
       <h1>Map Title</h1>
-      <p class="sub">Brief description</p>
+      <p class="sub">Brief description · drag to pan · scroll to zoom · arrow keys when focused</p>
     </div>
-    <div id="map"></div>
+    <!-- role="application" so AT users hear what this region is; Leaflet handles arrow-key panning natively -->
+    <div id="map" role="application" aria-label="Interactive map"></div>
   </div>
 
   <!-- 2. Leaflet JS — after the #map div -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
-    // All Leaflet code here
+    // All Leaflet code here. Choose tile layer based on theme:
+    //   const isLight = document.documentElement.dataset.theme === 'light' ||
+    //     (!document.documentElement.dataset.theme &&
+    //      window.matchMedia('(prefers-color-scheme: light)').matches);
+    //   const tileUrl = isLight
+    //     ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+    //     : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
   </script>
 </body>
 </html>
@@ -672,10 +700,35 @@ map.invalidateSize();     // call if map container was resized
 
   const map = L.map('map').setView([48.5, 7.5], 5);
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  // Theme-aware basemap — CartoDB ships paired dark + light raster tiles
+  const DARK_TILE  = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  const LIGHT_TILE = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  const TILE_OPTS  = {
     attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors, © <a href="https://carto.com">CARTO</a>',
     subdomains: 'abcd', maxZoom: 19,
-  }).addTo(map);
+  };
+
+  // Universal theme-detection pattern (data-theme override wins over OS preference)
+  const themeQuery = window.matchMedia('(prefers-color-scheme: light)');
+  function currentTheme() {
+    return document.documentElement.dataset.theme
+        || (themeQuery.matches ? 'light' : 'dark');
+  }
+  function onThemeChange(callback) {
+    new MutationObserver(callback).observe(document.documentElement, {
+      attributes: true, attributeFilter: ['data-theme'],
+    });
+    themeQuery.addEventListener('change', callback);
+  }
+
+  let currentTile = L.tileLayer(currentTheme() === 'light' ? LIGHT_TILE : DARK_TILE, TILE_OPTS).addTo(map);
+
+  // Swap basemap layer when the page theme changes
+  onThemeChange(() => {
+    const nextUrl = currentTheme() === 'light' ? LIGHT_TILE : DARK_TILE;
+    map.removeLayer(currentTile);
+    currentTile = L.tileLayer(nextUrl, TILE_OPTS).addTo(map);
+  });
 
   function makeIcon(type) {
     const s = TYPE_STYLES[type];
@@ -755,3 +808,6 @@ map.invalidateSize();     // call if map container was resized
 - **Missing attribution** — OpenStreetMap and CartoDB require attribution by their licenses. The `attribution` option in `L.tileLayer()` is not optional
 - **`L.icon()` with image URLs in self-contained artifacts** — use `L.divIcon()` for pure HTML/CSS icons that work without external image files
 - **Not destroying the map on re-render** — if recreating the map in the same container, call `map.remove()` first, otherwise Leaflet throws "Map container is already initialized"
+- **Light-mode users on a dark tile layer** — CartoDB Dark Matter is unreadable when the surrounding page is white; pick the tile URL at startup based on `prefers-color-scheme`
+- **Building popup HTML from user data with template literals** — `${store.name}` becomes literal HTML and is an XSS sink if the data is untrusted. Escape it (`textContent` via `document.createElement` + `appendChild`) or run it through DOMPurify
+- **No `aria-label`/`role` on the map container** — assistive tech users see only `<div>`; add `role="application"` and `aria-label="Interactive map of …"` so the region is announced

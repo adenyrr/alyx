@@ -33,6 +33,7 @@ import agents.memory_agent as memory_mod
 import agents.image_gen as image_gen_agent
 import agents.rag_agent as rag_agent
 import agents.reasoning as reasoning_agent
+import agents.writer as writer_agent
 
 _AGENT_MAP: dict[str, Callable] = {
     "wikipedia": wikipedia_agent.run,
@@ -46,6 +47,7 @@ _AGENT_MAP: dict[str, Callable] = {
     "image_gen": image_gen_agent.run,
     "rag":       rag_agent.run,
     "reasoning": reasoning_agent.run,
+    "writer":    writer_agent.run,
 }
 
 # Timeouts individuels en secondes (par défaut 45 s)
@@ -54,6 +56,7 @@ _AGENT_TIMEOUTS: dict[str, int] = {
     "doc":       90,   # sci-hub + requêtes académiques
     "media":     90,   # transcription YouTube
     "image_gen": 130,  # Pollinations.ai (timeout interne 120 s)
+    "writer":    90,   # rédaction longue + conversion pandoc éventuelle
     "dev":       60,   # Context7 + terminal
     "web":       50,   # DuckDuckGo + fetch multiple URLs
     "wikipedia": 50,

@@ -1,6 +1,7 @@
 ---
 name: tone-audio
 description: Create interactive audio synthesis and music applications using Tone.js, delivered as self-contained HTML artifacts. Use this skill whenever someone needs audio synthesis, sound effects, sequencing, musical instruments, beat machines, audio visualizers, or any interactive sound experience in the browser. Trigger on requests like "make a synthesizer", "create a drum machine", "build a piano", "generate audio in the browser", "make a music sequencer", or any prompt involving real-time audio generation. Do NOT use for audio file playback only (→ plain HTML <audio>), data visualizations (→ chartjs/d3 skill), or animation without sound (→ animejs/gsap skill).
+agents: [dev]
 ---
 
 # Tone.js Audio Skill
@@ -73,47 +74,64 @@ An interactive audio instrument with a "Start Audio" button that must be clicked
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Audio Instrument</title>
   <style>
+    :root {
+      --bg:     #0f1117;
+      --card:   #1a1d27;
+      --border: rgba(255,255,255,0.08);
+      --text:   #e2e8f0;
+      --title:  #f1f5f9;
+      --muted:  #64748b;
+      --accent: #6366f1;
+      --accent-h: #818cf8;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff;
+        --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --title: #0f172a; --muted: #475569;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff;
+      --border: rgba(0,0,0,0.08);
+      --text: #1e293b; --title: #0f172a; --muted: #475569;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-height: 100vh;
-      padding: 24px;
+      background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; align-items: center;
+      min-height: 100vh; padding: 24px;
     }
     .card {
-      width: 100%;
-      max-width: 700px;
-      background: #1a1d27;
-      border-radius: 16px;
-      padding: 28px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      width: 100%; max-width: 700px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.15);
     }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
+    h1 { font-size: 1.15rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--muted); margin-bottom: 20px; }
     .btn {
-      background: #6366f1;
-      color: #fff;
-      border: none;
-      border-radius: 10px;
-      padding: 10px 24px;
-      font-size: 14px;
-      cursor: pointer;
+      background: var(--accent); color: #fff; border: none; border-radius: 10px;
+      padding: 10px 24px; font-size: 14px; cursor: pointer;
       transition: background 0.15s;
     }
-    .btn:hover { background: #818cf8; }
+    .btn:hover { background: var(--accent-h); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    /* Always preserve focus-visible outlines on interactive controls */
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Instrument Name</h1>
+    <!-- AudioContext requires a user gesture: the "Start Audio" button below -->
     <p class="sub">Click "Start Audio" to enable sound · then interact with controls</p>
-    <button class="btn" id="start-btn">Start Audio</button>
-    <div id="controls" style="margin-top:20px; display:none;">
+    <button class="btn" id="start-btn" aria-describedby="audio-hint">Start Audio</button>
+    <p id="audio-hint" class="sub" style="margin-top:8px;font-size:0.7rem;">
+      Browsers block audio until the first user click — this is a hard requirement, not a Tone.js detail.
+    </p>
+    <div id="controls" role="group" aria-label="Instrument controls" style="margin-top:20px; display:none;">
       <!-- Interactive controls here -->
     </div>
   </div>
@@ -121,9 +139,12 @@ An interactive audio instrument with a "Start Audio" button that must be clicked
   <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
   <script>
     document.getElementById('start-btn').addEventListener('click', async () => {
+      // REQUIRED user-gesture entry point — see Step 3
       await Tone.start();
-      document.getElementById('start-btn').disabled = true;
-      document.getElementById('start-btn').textContent = 'Audio Active ✓';
+      const btn = document.getElementById('start-btn');
+      btn.disabled = true;
+      btn.textContent = 'Audio Active';
+      btn.setAttribute('aria-pressed', 'true');
       document.getElementById('controls').style.display = 'block';
       // Initialize instruments here
     });
@@ -134,18 +155,19 @@ An interactive audio instrument with a "Start Audio" button that must be clicked
 
 ---
 
-## Step 3 — AudioContext User-Gesture Requirement
+## Step 3 — AudioContext User-Gesture Requirement (MANDATORY)
 
-**Critical:** Browsers require a user gesture (click/tap) before audio can play.
+**Browsers suspend `AudioContext` on load.** You **must** call `Tone.start()` from inside a real user-gesture handler — `click`, `pointerdown`, `touchend`, or `keydown` — and `await` it. Calling it from `DOMContentLoaded`, `setTimeout`, or any other non-gesture source silently fails on Chrome, Safari, and Firefox.
 
 ```javascript
-// ALWAYS start with this pattern
+// ALWAYS start with this pattern — a single visible "Start Audio" button
 document.getElementById('start-btn').addEventListener('click', async () => {
-  await Tone.start();  // Resumes AudioContext
-  console.log('Audio is ready');
-  // Now safe to create synths, start transport, etc.
+  await Tone.start();   // Resumes AudioContext — required user gesture
+  // Now safe to create synths, start Transport, schedule events, etc.
 });
 ```
+
+**Document this in the UI.** The shell shows a `<p id="audio-hint">` so users know the click is unavoidable; do not hide it. Do not auto-start audio via JS — every iOS and modern desktop browser will reject it.
 
 > Never create synths or start the Transport before `Tone.start()` resolves.
 
@@ -344,7 +366,14 @@ sampler.triggerAttackRelease('C4', '4n');
 - **Visual feedback** — highlight keys/pads when they produce sound; use CSS transitions or class toggling for active states
 - **Keyboard mapping legend** — show a small legend of which keys map to which notes
 - **Slider controls** — for parameters like BPM, reverb wet, filter frequency; use `<input type="range">` styled with the dark theme
-- **Canvas visualizer** — pair audio with an FFT or waveform canvas for visual engagement; match canvas background to `#0f1117`
+- **Canvas visualizer** — pair audio with an FFT or waveform canvas for visual engagement. Read the page's `--bg` CSS variable so the canvas matches the active theme instead of hard-coding `#0f1117`, and re-paint when `prefers-color-scheme` changes so dark/light flips stay consistent:
+  ```js
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Re-paint on system theme change so the visualizer stays in sync:
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => requestAnimationFrame(drawFrame));
+  ```
 - **Latency** — keep the signal chain short; too many chained effects increase latency perceptibly
 - **Dispose** — call `synth.dispose()` when removing instruments to free Web Audio nodes and prevent memory leaks
 - **Transport state UI** — show play/pause/stop buttons that reflect `Tone.getTransport().state`
@@ -363,25 +392,43 @@ sampler.triggerAttackRelease('C4', '4n');
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mini Synth</title>
   <style>
+    :root {
+      --bg: #0f1117; --card: #1a1d27;
+      --title: #f1f5f9; --text: #e2e8f0; --muted: #64748b;
+      --key-white-bg: #2a2d3a; --key-black-bg: #0f1117; --key-bd: #2a2d3a;
+      --accent: #6366f1; --accent-h: #818cf8; --accent-d: #4f46e5;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff;
+        --title: #0f172a; --text: #1e293b; --muted: #475569;
+        --key-white-bg: #e2e8f0; --key-black-bg: #f8fafc; --key-bd: #cbd5e1;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff;
+      --title: #0f172a; --text: #1e293b; --muted: #475569;
+      --key-white-bg: #e2e8f0; --key-black-bg: #f8fafc; --key-bd: #cbd5e1;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
-    .card { background: #1a1d27; border-radius: 16px; padding: 28px; width: 100%; max-width: 700px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 16px; }
-    .btn { background: #6366f1; color: #fff; border: none; border-radius: 10px; padding: 10px 24px; font-size: 14px; cursor: pointer; }
-    .btn:hover { background: #818cf8; }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+    .card { background: var(--card); border-radius: 16px; padding: 28px; width: 100%; max-width: 700px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+    h1 { font-size: 1.15rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--muted); margin-bottom: 16px; }
+    .btn { background: var(--accent); color: #fff; border: none; border-radius: 10px; padding: 10px 24px; font-size: 14px; cursor: pointer; }
+    .btn:hover { background: var(--accent-h); }
     .btn:disabled { opacity: 0.5; }
     #controls { display: none; margin-top: 20px; }
     .keyboard { display: flex; gap: 4px; margin-bottom: 20px; position: relative; height: 140px; }
     .key { flex: 1; border-radius: 0 0 8px 8px; cursor: pointer; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 10px; font-size: 11px; transition: all 0.1s; user-select: none; }
-    .key.white { background: #2a2d3a; color: #94a3b8; height: 100%; min-width: 40px; }
-    .key.white:hover, .key.white.active { background: #6366f1; color: #fff; }
-    .key.black { background: #0f1117; color: #64748b; height: 60%; min-width: 30px; position: absolute; z-index: 2; border: 1px solid #2a2d3a; }
-    .key.black:hover, .key.black.active { background: #4f46e5; color: #fff; }
+    .key.white { background: var(--key-white-bg); color: var(--muted); height: 100%; min-width: 40px; }
+    .key.white:hover, .key.white.active { background: var(--accent); color: #fff; }
+    .key.black { background: var(--key-black-bg); color: var(--muted); height: 60%; min-width: 30px; position: absolute; z-index: 2; border: 1px solid var(--key-bd); }
+    .key.black:hover, .key.black.active { background: var(--accent-d); color: #fff; }
     .sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .slider-group label { font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px; }
-    .slider-group input[type=range] { width: 100%; accent-color: #6366f1; }
-    canvas { width: 100%; height: 60px; border-radius: 8px; margin-bottom: 16px; background: #0f1117; }
+    .slider-group label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+    .slider-group input[type=range] { width: 100%; accent-color: var(--accent); }
+    canvas { width: 100%; height: 60px; border-radius: 8px; margin-bottom: 16px; background: var(--bg); }
   </style>
 </head>
 <body>
@@ -473,12 +520,19 @@ sampler.triggerAttackRelease('C4', '4n');
       drawWaveform();
     });
 
+    // Read theme tokens from CSS variables so the visualizer matches dark/light.
+    const css = () => getComputedStyle(document.documentElement);
+    function themeBg()     { return css().getPropertyValue('--bg').trim()     || '#0f1117'; }
+    function themeAccent() { return css().getPropertyValue('--accent').trim() || '#6366f1'; }
+
     function drawWaveform() {
       if (!analyser) return;
       const data = analyser.getValue();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Paint the theme background each frame instead of relying on clearRect alpha.
+      ctx.fillStyle = themeBg();
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.beginPath();
-      ctx.strokeStyle = '#6366f1';
+      ctx.strokeStyle = themeAccent();
       ctx.lineWidth = 2;
       const step = canvas.width / data.length;
       data.forEach((val, i) => {
@@ -488,6 +542,10 @@ sampler.triggerAttackRelease('C4', '4n');
       ctx.stroke();
       requestAnimationFrame(drawWaveform);
     }
+    // Force an immediate repaint when the OS theme preference changes.
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+      if (analyser) requestAnimationFrame(drawWaveform);
+    });
 
     function playNote(note) {
       if (!synth) return;
@@ -538,6 +596,7 @@ sampler.triggerAttackRelease('C4', '4n');
 ## Common Mistakes to Avoid
 
 - **No `await Tone.start()` before playing** — the AudioContext is suspended until a user gesture triggers `Tone.start()`; audio will silently fail without it
+- **Calling `Tone.start()` outside a real user-gesture handler** — `setTimeout(Tone.start)`, `window.onload`, and `IntersectionObserver` callbacks do **not** count as user gestures; browsers will still reject the resume. Use `click` / `pointerdown` / `touchend` on a visible button
 - **Creating synths before `Tone.start()`** — create instruments after the AudioContext is active, not at page load
 - **Not calling `.toDestination()`** — synths and effects must be connected to the destination (speakers); without it, no sound plays
 - **Key repeat flooding** — always check `if (e.repeat) return;` in `keydown` handlers to prevent rapid-fire note triggering
@@ -546,4 +605,7 @@ sampler.triggerAttackRelease('C4', '4n');
 - **Transport not started** — sequences and loops only play after `Tone.getTransport().start()`
 - **FFT values in dB** — `analyser.getValue()` returns dB values (negative numbers); normalize to `[0, 1]` for canvas drawing
 - **Effect order matters** — chain effects in signal-flow order: `synth → delay → reverb → filter → destination`
+- **No master volume cap** — protect the user's ears: set `Tone.getDestination().volume.value = -6` (dB) at startup so the instrument is never blistering on first interaction
+- **Suppressing focus outlines on play controls** — keyboard players rely on `:focus-visible`; don't override it for buttons, sliders, or keys
+- **No `aria-label` on canvas visualizers** — the FFT/waveform canvas should expose `role="img"` + `aria-label="Live audio visualizer"` so screen readers know its purpose
 - **Mobile audio policies** — on iOS, audio only works after a touchstart/click event; the "Start Audio" button pattern handles this

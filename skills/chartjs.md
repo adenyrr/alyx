@@ -1,6 +1,7 @@
 ---
 name: chartjs
 description: Create polished, interactive data charts using Chart.js v4, delivered as self-contained HTML artifacts. Use this skill for standard data visualization: bar charts, line charts, pie/donut charts, radar charts, polar area charts, scatter plots, bubble charts, and mixed charts. Trigger on requests to visualize metrics, compare values, build dashboards, show trends, create presentation-ready charts, or plot datasets — even without explicit mention of Chart.js. Do NOT use for: scientific/statistical charts like box plots, violins, 3D surfaces (→ plotly skill), network graphs (→ vis-network skill), timelines or Gantt charts (→ vis-timeline skill), or bespoke SVG visualizations with custom layouts (→ d3-charting skill).
+agents: [dev]
 ---
 
 # Chart.js Skill — v4
@@ -69,7 +70,7 @@ An immediately interactive chart: hover over any data point for a tooltip, click
 
 ```html
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -117,30 +118,41 @@ An immediately interactive chart: hover over any data point for a tooltip, click
 
 ---
 
-## Step 3 — Dark Theme Reference
+## Step 3 — Dark & Light Theming
 
-Chart.js uses global defaults for theming. Set them once before creating any chart:
+Chart.js uses global defaults for theming. Detect the theme and apply tokens before creating any chart:
 
 ```javascript
-Chart.defaults.color       = '#94a3b8';
-Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+const THEMES = {
+  dark:  { text: '#94a3b8', border: 'rgba(255,255,255,0.08)', grid: 'rgba(255,255,255,0.06)' },
+  light: { text: '#475569', border: 'rgba(0,0,0,0.10)',       grid: 'rgba(0,0,0,0.06)'       },
+};
+const isLight =
+  document.documentElement.dataset.theme === 'light' ||
+  (!document.documentElement.dataset.theme &&
+   window.matchMedia('(prefers-color-scheme: light)').matches);
+const T = isLight ? THEMES.light : THEMES.dark;
+
+Chart.defaults.color       = T.text;
+Chart.defaults.borderColor = T.border;
 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
 Chart.defaults.font.size   = 13;
 ```
 
-**Theming tokens (dark theme — default):**
+**Theming tokens:**
 
-| Token | Value |
-|---|---|
-| Page background | `#0f1117` |
-| Card background | `#1a1d27` |
-| Grid lines | `rgba(255,255,255,0.06)` |
-| Axis text / labels | `#94a3b8` |
-| Title | `#f1f5f9` |
-| Subtitle | `#64748b` |
-| Accent | `#6366f1` |
+| Token            | Dark                     | Light                |
+|------------------|--------------------------|----------------------|
+| Page background  | `#0f1117`                | `#f8fafc`            |
+| Card background  | `#1a1d27`                | `#ffffff`            |
+| Border           | `rgba(255,255,255,0.08)` | `rgba(0,0,0,0.08)`   |
+| Grid lines       | `rgba(255,255,255,0.06)` | `rgba(0,0,0,0.06)`   |
+| Axis text        | `#94a3b8`                | `#475569`            |
+| Title            | `#f1f5f9`                | `#1e293b`            |
+| Subtitle / muted | `#64748b`                | `#64748b`            |
+| Accent           | `#6366f1`                | `#6366f1`            |
 
-Light theme alternative: page `#f8fafc`, card `#ffffff`, grid `rgba(0,0,0,0.08)`, text `#475569`.
+To switch at runtime, set `document.documentElement.dataset.theme = 'light'` and call `chart.update()` after reassigning `Chart.defaults.color` / dataset colors.
 
 ---
 
@@ -385,8 +397,9 @@ chart.destroy();
 - **Meaningful tooltips** — `mode: 'index', intersect: false` shows all datasets at a given x-value
 - **Legend placement** — top for ≤ 4 series, right for more; use `usePointStyle: true` for cleaner dots
 - **Grid cleanup** — hide x-axis grid lines (`display: false`), keep y-axis grid subtle (`rgba(255,255,255,0.06)`)
-- **Accessibility** — add `aria-label` on the `<canvas>` element: `<canvas id="chart" aria-label="Revenue chart">`
-- **Color contrast** — maintain ≥ 3:1 contrast between data colors and background
+- **Accessibility** — add `role="img"` plus `aria-label` (or `aria-labelledby` referencing the title) on the `<canvas>`. Include a text fallback inside the canvas for screen readers: `<canvas id="chart" role="img" aria-label="Revenue by quarter">Revenue rose from $420K in Q1 to $690K in Q4.</canvas>`
+- **Color contrast** — maintain ≥ 4.5:1 contrast between text and background and ≥ 3:1 between adjacent data colors; verify the muted axis text (`#94a3b8` on `#0f1117` ≈ 7:1 — OK; on `#1a1d27` ≈ 5.6:1 — OK)
+- **Respect reduced motion** — wrap entry animations behind the media query and either set `animation: false` or use a much shorter `duration` when `prefers-reduced-motion: reduce`
 - **Staggered entry** — `delay: (ctx) => ctx.dataIndex * 60` adds a professional sequential reveal
 
 ---
@@ -412,10 +425,17 @@ chart.destroy();
   <div class="card">
     <h1>Revenue by Quarter</h1>
     <p class="sub">Fiscal year 2024 — All regions combined · hover for details</p>
-    <canvas id="chart" aria-label="Revenue by quarter bar chart"></canvas>
+    <canvas id="chart" role="img" aria-label="Quarterly revenue by region for fiscal year 2024">
+      <!-- Fallback for screen readers and non-canvas browsers -->
+      North America rose from $420K (Q1) to $690K (Q4); Europe $310K → $510K; Asia Pacific $180K → $380K.
+    </canvas>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js" crossorigin="anonymous"></script>
   <script>
+    const STAGGER_MS  = 80;          // delay between bars (named constant)
+    const ANIM_MS     = 800;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     Chart.defaults.color       = '#94a3b8';
     Chart.defaults.borderColor = 'rgba(255,255,255,0.07)';
     Chart.defaults.font.family = 'Segoe UI, sans-serif';
@@ -433,10 +453,10 @@ chart.destroy();
       options: {
         responsive: true,
         aspectRatio: 2,
-        animation: {
-          duration: 800,
+        animation: reducedMotion ? false : {
+          duration: ANIM_MS,
           easing: 'easeOutQuart',
-          delay: (ctx) => ctx.dataIndex * 80,
+          delay: (ctx) => ctx.dataIndex * STAGGER_MS,
         },
         plugins: {
           legend: { position: 'top', labels: { usePointStyle: true, padding: 16 } },
@@ -469,3 +489,6 @@ chart.destroy();
 - **`tension: 0.4` on financial data** — smooth curves distort precise values; use `tension: 0` for data where exact values matter
 - **Stacking without matching `stack` property** — when mixing stacked and non-stacked datasets, assign a `stack` property to each dataset explicitly
 - **Not destroying before recreating** — if you update a chart by creating a new `Chart()` on the same canvas, always call `chart.destroy()` first to prevent memory leaks and ghost tooltips
+- **No accessible alternative** — `<canvas>` is opaque to assistive tech. Always set `role="img"` + `aria-label`, and place a textual summary inside the canvas so screen readers can describe the data
+- **Ignoring `prefers-reduced-motion`** — entrance staggers and bounce easing can trigger motion sickness; set `animation: false` (or shorten dramatically) when the user prefers reduced motion
+- **Using `var` in examples / inline scripts** — prefer `const`/`let`; `var` leaks to the surrounding scope and shadows globals like `Chart`

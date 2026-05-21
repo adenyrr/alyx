@@ -1,6 +1,7 @@
 ---
 name: tailwind-css
 description: Build fast, responsive, utility-first interfaces using Tailwind CSS v4, delivered as self-contained HTML or React artifacts. Use this skill whenever someone needs a custom-styled UI without a pre-defined component vocabulary — layouts, landing pages, dashboards, cards, forms, or any interface where fine-grained control over every spacing, color, and typography decision is desired. Trigger on requests like "style this with Tailwind", "build a responsive layout", "create a dark landing page", "make a product card", "design a form", or any prompt that implies writing CSS inline through utility classes rather than component libraries. Tailwind excels at bespoke design systems. Do NOT use when the user wants pre-built components without touching classes (→ bulma-css or shadcn-ui), interactive 3D (→ threejs-3d), or generative art (→ p5js).
+agents: [dev]
 ---
 
 # Tailwind CSS Skill — v4
@@ -94,9 +95,11 @@ In v4, there is no `tailwind.config.js`. All customization happens in CSS via th
 
 ## Step 2 — HTML Artifact Shell
 
+Pair a dark default with a light counterpart that follows the user's system preference, or honour an explicit `.dark` class on `<html>`.
+
 ```html
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -104,18 +107,27 @@ In v4, there is no `tailwind.config.js`. All customization happens in CSS via th
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <style type="text/tailwindcss">
     @theme {
-      --color-brand: #6366f1;
+      --color-brand:  #6366f1;
       --color-accent: #ec4899;
-      --font-sans: 'Segoe UI', system-ui, sans-serif;
+      --font-sans:    'Segoe UI', system-ui, sans-serif;
     }
-    /* Custom CSS using Tailwind variables */
-    @layer base {
-      body { @apply bg-gray-950 text-gray-100 antialiased; }
-    }
+    /* Class-based dark mode — toggle .dark on <html> */
+    @custom-variant dark (&:where(.dark, .dark *));
   </style>
 </head>
-<body class="min-h-screen">
-  <!-- content -->
+<!-- Light is default; dark applies when .dark is set on <html> -->
+<body class="min-h-screen bg-[#f8fafc] text-[#1e293b] dark:bg-[#0f1117] dark:text-[#e2e8f0] antialiased">
+  <!-- content uses dark: prefix for dark-mode overrides -->
+
+  <script>
+    // Follow system preference; users can override by setting localStorage('theme')
+    (function initTheme() {
+      const mql = matchMedia('(prefers-color-scheme: dark)');
+      const apply = () => document.documentElement.classList.toggle('dark', mql.matches);
+      apply();
+      mql.addEventListener('change', apply);
+    })();
+  </script>
 </body>
 </html>
 ```
@@ -499,15 +511,17 @@ When the theme scale isn't enough, use square brackets for one-off values:
 
 ## Step 13 — Design & Polish Guidelines
 
-- **Dark theme tokens** — define custom colors in `@theme { }` and use them as utilities (`bg-body`, `text-title`, `border-subtle`) for consistency
-- **Spacing rhythm** — stick to Tailwind’s 4px scale (`p-4` = 16px, `gap-6` = 24px); avoid arbitrary values unless necessary
+- **Theme tokens (dark + light)** — define custom colors in `@theme { }` and use them as utilities (`bg-body`, `text-title`, `border-subtle`) for consistency. Pair every dark utility with a light counterpart using `dark:` (e.g. `bg-white dark:bg-[#0f1117]`)
+- **Spacing rhythm** — stick to Tailwind's 4px scale (`p-4` = 16px, `gap-6` = 24px); avoid arbitrary values unless necessary
 - **Rounded corners** — `rounded-2xl` (16px) for cards, `rounded-lg` (8px) for buttons and inputs — consistent radius across the page
-- **Shadows** — `shadow-lg` or `shadow-xl` for elevated cards on dark backgrounds; avoid `shadow-sm` which is invisible on dark themes
-- **Focus states** — always include `focus:ring-2 focus:ring-indigo-500 focus:outline-none` on interactive elements for accessibility
+- **Shadows** — `shadow-lg` or `shadow-xl` for elevated cards on dark backgrounds; on light themes use `shadow-md` (heavy shadows look harsh)
+- **Focus states** — always pair `focus-visible:ring-2 focus-visible:ring-indigo-500` with `focus-visible:outline-hidden` (v4 rename) — but never suppress the ring entirely. `outline-hidden` removes the default browser outline only when the ring is visible
 - **Hover transitions** — add `transition-colors duration-200` to elements with `hover:` color changes for smooth feedback
+- **Reduced motion** — wrap large transforms/animations in `motion-safe:` (e.g. `motion-safe:animate-fade-up`) so they pause for users with `prefers-reduced-motion: reduce`
+- **Contrast** — body text on `bg-gray-950` should be at least `text-gray-200` (≥ 4.5:1); on `bg-white` use `text-gray-800`. Run a contrast check before shipping muted text on either background
 - **Text hierarchy** — use `text-sm` for body, `text-xs` for labels/captions, `text-lg` or `text-xl` for headings; keep the scale tight
 - **Responsive testing** — always test `sm:`, `md:`, `lg:` breakpoints; use `flex-col md:flex-row` for stack-to-row patterns
-- **No `@apply` in artifacts** — the Play CDN doesn’t support `@apply`; use inline utilities only
+- **No `@apply` in artifacts** — the Play CDN doesn't support `@apply`; use inline utilities only
 
 ---
 
@@ -634,3 +648,6 @@ When the theme scale isn't enough, use square brackets for one-off values:
 - **`@apply` not supported in Play CDN** — the browser CDN does not support `@apply`. Use component classes or `@utility` directives instead. `@apply` only works in build-tool setups
 - **Relying on `container` class without configuration** — the `container` utility is fixed-width by breakpoint and NOT centered by default. Add `mx-auto` and `px-4` to center it: `<div class="container mx-auto px-4">`
 - **Overriding with `@theme` instead of `extend`** — in v4, defining `--color-*` in `@theme` adds to the palette without removing defaults; but defining `--font-*` replaces the defaults. Be intentional about whether you're adding or replacing
+- **Using v3 `darkMode: 'class'` config** — v4 has no JS config; use `@custom-variant dark (&:where(.dark, .dark *))` in a `<style type="text/tailwindcss">` block instead
+- **Suppressing focus rings** — `focus:outline-none` without a replacement ring breaks keyboard accessibility; in v4 use `focus-visible:outline-hidden` paired with `focus-visible:ring-2`
+- **Animations without `motion-safe:`** — users with `prefers-reduced-motion: reduce` still see the animation; gate it with `motion-safe:animate-*`

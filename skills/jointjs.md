@@ -1,6 +1,7 @@
 ---
 name: jointjs-flowchart
 description: Create interactive, editable flowcharts and diagrams using JointJS, delivered as self-contained HTML artifacts. Use this skill whenever someone needs draggable nodes, editable connections, port-based linking, custom shapes, or any interactive diagram that users can manipulate — process flows, BPMN workflows, architecture diagrams, data pipelines, decision trees, or whiteboard-style editable diagrams. Trigger on requests like "make an editable flowchart", "create a draggable diagram", "build a visual workflow editor", "design a pipeline builder", or any prompt where the user should be able to drag, connect, and rearrange nodes. Do NOT use for static diagrams (→ mermaid-diagrams skill), network graphs with physics layout (→ vis-network skill), or data charts (→ chartjs / plotly skill).
+agents: [dev]
 ---
 
 # JointJS Flowchart Skill
@@ -54,7 +55,7 @@ An interactive diagram editor: drag shapes to reposition, click and drag between
 
 ```html
 <!-- JointJS (includes Backbone and jQuery dependencies) -->
-<script src="https://cdn.jsdelivr.net/npm/@joint/core/dist/joint.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@joint/core@4.2.4/dist/joint.js"></script>
 ```
 
 > JointJS bundles its own CSS. The `joint.js` file includes everything needed — no separate CSS file required for basic usage.
@@ -114,7 +115,7 @@ An interactive diagram editor: drag shapes to reposition, click and drag between
     <div id="paper"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@joint/core/dist/joint.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@joint/core@4.2.4/dist/joint.js"></script>
   <script>
     // All JointJS code here
   </script>
@@ -124,38 +125,32 @@ An interactive diagram editor: drag shapes to reposition, click and drag between
 
 ---
 
-## Step 3 — Dark Theme Reference
+## Step 3 — Theme Reference (Dark + Light)
 
-JointJS renders SVG elements. Theme them via `attrs` on each shape:
+JointJS renders SVG elements. Theme them via `attrs` on each shape. Pick the token set at startup based on `prefers-color-scheme` or `[data-theme]`.
 
 ```javascript
-// Dark shape defaults
-const DARK_ATTRS = {
-  body: {
-    fill: '#1e2130',
-    stroke: 'rgba(255,255,255,0.15)',
-    strokeWidth: 1.5,
-    rx: 8,
-    ry: 8,
-  },
-  label: {
-    fill: '#f1f5f9',
-    fontSize: 13,
-    fontFamily: 'Segoe UI, system-ui, sans-serif',
-    fontWeight: 500,
-    textVerticalAnchor: 'middle',
-    textAnchor: 'middle',
-  },
+const DARK_THEME = {
+  paperBg: '#0f1117',
+  body:  { fill: '#1e2130', stroke: 'rgba(255,255,255,0.15)' },
+  label: { fill: '#f1f5f9' },
+  link:  { stroke: '#64748b', markerFill: '#64748b' },
+  accent: '#6366f1',
 };
+const LIGHT_THEME = {
+  paperBg: '#f8fafc',
+  body:  { fill: '#ffffff', stroke: 'rgba(0,0,0,0.15)' },
+  label: { fill: '#1e293b' },
+  link:  { stroke: '#475569', markerFill: '#475569' },
+  accent: '#6366f1',
+};
+const isLight =
+  document.documentElement.dataset.theme === 'light' ||
+  (!document.documentElement.dataset.theme &&
+   window.matchMedia('(prefers-color-scheme: light)').matches);
+const T = isLight ? LIGHT_THEME : DARK_THEME;
 
-// Dark link defaults
-const DARK_LINK_ATTRS = {
-  line: {
-    stroke: '#64748b',
-    strokeWidth: 2,
-    targetMarker: { type: 'path', fill: '#64748b', d: 'M 10 -5 0 0 10 5 Z' },
-  },
-};
+// Use T.body / T.label / T.link / T.paperBg below when defining shapes and the Paper.
 ```
 
 ---
@@ -462,7 +457,7 @@ paper.el.addEventListener('wheel', (e) => {
     <div id="paper"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@joint/core/dist/joint.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@joint/core@4.2.4/dist/joint.js"></script>
   <script>
     const { dia, shapes } = joint;
     const COLORS = ['#6366f1','#8b5cf6','#ec4899','#22c55e','#06b6d4','#f97316'];
@@ -534,7 +529,12 @@ paper.el.addEventListener('wheel', (e) => {
     document.getElementById('btn-export').addEventListener('click', () => {
       const json = JSON.stringify(graph.toJSON(), null, 2);
       const blob = new Blob([json], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'flowchart.json'; a.click();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'flowchart.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      // Important: revoke to free the blob memory
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     });
     document.getElementById('btn-clear').addEventListener('click', () => { if (confirm('Clear all?')) graph.clear(); });
   </script>
@@ -554,3 +554,7 @@ paper.el.addEventListener('wheel', (e) => {
 - **Not handling `change:target`** — when a link is reconnected, validate the new connection to prevent invalid flows
 - **Global `joint` object** — the CDN build exposes `joint` globally; destructure `const { dia, shapes } = joint;` at the top of your script
 - **SVG vs CSS** — JointJS elements are SVG, not DOM; use `attrs` (SVG attributes) not CSS properties for styling shapes
+- **No `aria-label` on the Paper container** — JointJS is opaque to assistive tech; add `role="application"` and `aria-label="Editable flowchart"` on `#paper`, and label the toolbar with `<button aria-label="Add node">`
+- **Forgetting `URL.revokeObjectURL`** — Export JSON / PNG snippets create a blob URL per click; without revoking, the page leaks memory and screenshot data lives forever
+- **Hard-coded dark colours** — the `DARK_ATTRS` pattern breaks light-mode embeds; pick the token set at startup based on `prefers-color-scheme` and reapply when the theme changes
+- **Suppressing browser focus on toolbar buttons** — keyboard users navigate via Tab; keep `button:focus-visible { outline: 2px solid var(--accent) }` instead of `outline: none`

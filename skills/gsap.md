@@ -1,6 +1,7 @@
 ---
 name: gsap-animation
 description: Create scroll-driven animations, parallax effects, and rich motion storytelling using GSAP (GreenSock Animation Platform) with ScrollTrigger, delivered as self-contained HTML artifacts. Use this skill whenever someone needs scroll-triggered animations, parallax scrolling, pinned section reveals, text split/stagger animations, SVG morphing, timeline-based sequenced motion, or cinematic scrollytelling. Trigger on requests like "make a parallax landing page", "animate sections on scroll", "create a scroll-driven story", "build an animated timeline on scroll", or any prompt requiring scroll-aware animations. Do NOT use for simple micro-interactions (→ animejs-animation skill), data visualizations (→ d3/chartjs/plotly), or 3D scenes (→ threejs-3d).
+agents: [dev]
 ---
 
 # GSAP Animation Skill
@@ -81,11 +82,27 @@ Optional plugins (load only when needed):
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scroll Animation</title>
   <style>
+    /* Dual-theme tokens — dark default, light via media query / [data-theme="light"] */
+    :root {
+      --bg: #0f1117; --card: #1a1d27; --border: rgba(255,255,255,0.08);
+      --text: #e2e8f0; --muted: #94a3b8; --heading: #f1f5f9; --accent: #6366f1;
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+      --text: #1e293b; --muted: #475569; --heading: #0f172a;
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --muted: #475569; --heading: #0f172a;
+      }
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
+      background: var(--bg);
+      color: var(--text);
     }
     section {
       min-height: 100vh;
@@ -95,29 +112,37 @@ Optional plugins (load only when needed):
       justify-content: center;
       padding: 60px 24px;
     }
-    h1 { font-size: 2.5rem; font-weight: 700; color: #f1f5f9; margin-bottom: 12px; }
-    h2 { font-size: 1.6rem; font-weight: 600; color: #f1f5f9; margin-bottom: 8px; }
-    p { font-size: 1rem; color: #94a3b8; max-width: 600px; text-align: center; line-height: 1.7; }
-    .accent { color: #6366f1; }
+    h1 { font-size: clamp(2rem, 5vw, 2.5rem); font-weight: 700; color: var(--heading); margin-bottom: 12px; }
+    h2 { font-size: 1.6rem; font-weight: 600; color: var(--heading); margin-bottom: 8px; }
+    p  { font-size: 1rem; color: var(--muted); max-width: 600px; text-align: center; line-height: 1.7; }
+    .accent { color: var(--accent); }
     .card {
-      background: #1a1d27;
+      background: var(--card);
+      border: 1px solid var(--border);
       border-radius: 16px;
       padding: 28px;
       box-shadow: 0 8px 40px rgba(0,0,0,0.5);
       max-width: 600px;
       width: 100%;
     }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   </style>
 </head>
 <body>
-  <section class="hero"> ... </section>
-  <section class="content"> ... </section>
+  <section class="hero" role="region" aria-label="Hero"> ... </section>
+  <section class="content" role="region" aria-label="Main content"> ... </section>
 
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" crossorigin="anonymous"></script>
   <script>
     gsap.registerPlugin(ScrollTrigger);
-    // All GSAP code here
+    // Respect reduced-motion: jump elements to final state instead of animating
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      gsap.set('*', { clearProps: 'all' });   // surrender control of animations
+      // Optionally also: ScrollTrigger.getAll().forEach(t => t.disable());
+    } else {
+      // All GSAP code here
+    }
   </script>
 </body>
 </html>
@@ -357,36 +382,67 @@ gsap.to('.fg-layer', {
 
 ```html
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scroll Story</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; overflow-x: hidden; }
-    section { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 24px; position: relative; }
-    .hero h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; color: #f1f5f9; text-align: center; }
-    .hero p { font-size: 1.1rem; color: #94a3b8; margin-top: 12px; text-align: center; }
-    .accent { color: #6366f1; }
+    :root, [data-theme="dark"] {
+      --bg:       #0f1117;
+      --card:     #1a1d27;
+      --border:   rgba(255,255,255,0.08);
+      --text:     #e2e8f0;
+      --heading:  #f1f5f9;
+      --muted:    #94a3b8;
+      --subtle:   #64748b;
+      --accent:   #6366f1;
+      --shadow:   0 8px 40px rgba(0,0,0,0.5);
+    }
+    [data-theme="light"] {
+      --bg:       #f8fafc;
+      --card:     #ffffff;
+      --border:   rgba(0,0,0,0.08);
+      --text:     #1e293b;
+      --heading:  #0f172a;
+      --muted:    #475569;
+      --subtle:   #64748b;
+      --accent:   #6366f1;
+      --shadow:   0 8px 40px rgba(15,23,42,0.08);
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme]) {
+        --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --heading: #0f172a; --muted: #475569;
+        --shadow: 0 8px 40px rgba(15,23,42,0.08);
+      }
+    }
 
-    .progress-bar { position: fixed; top: 0; left: 0; height: 3px; width: 100%; background: #6366f1; transform-origin: left; transform: scaleX(0); z-index: 100; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; transition: background 200ms, color 200ms; }
+    section { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 24px; position: relative; }
+    .hero h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; color: var(--heading); text-align: center; }
+    .hero p { font-size: 1.1rem; color: var(--muted); margin-top: 12px; text-align: center; }
+    .accent { color: var(--accent); }
+
+    .progress-bar { position: fixed; top: 0; left: 0; height: 3px; width: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0); z-index: 100; }
 
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; max-width: 900px; width: 100%; }
-    .card { background: #1a1d27; border-radius: 16px; padding: 28px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
-    .card h3 { font-size: 1rem; color: #f1f5f9; margin-bottom: 8px; }
-    .card p { font-size: 0.85rem; color: #94a3b8; line-height: 1.6; text-align: left; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 28px; box-shadow: var(--shadow); }
+    .card h3 { font-size: 1rem; color: var(--heading); margin-bottom: 8px; }
+    .card p { font-size: 0.85rem; color: var(--muted); line-height: 1.6; text-align: left; }
 
     .stat-section { gap: 40px; }
+    .stat-section h2 { color: var(--heading); font-size: 1.4rem; }
     .stats { display: flex; gap: 40px; flex-wrap: wrap; justify-content: center; }
     .stat { text-align: center; }
-    .stat .num { font-size: 2.5rem; font-weight: 700; color: #6366f1; }
-    .stat .label { font-size: 0.82rem; color: #64748b; margin-top: 4px; }
+    .stat .num { font-size: 2.5rem; font-weight: 700; color: var(--accent); }
+    .stat .label { font-size: 0.82rem; color: var(--subtle); margin-top: 4px; }
 
     .pinned-section { overflow: hidden; }
     .pin-content { max-width: 600px; text-align: center; }
-    .pin-content h2 { font-size: 1.8rem; color: #f1f5f9; margin-bottom: 12px; }
-    .pin-content p { font-size: 0.95rem; color: #94a3b8; line-height: 1.7; }
+    .pin-content h2 { font-size: 1.8rem; color: var(--heading); margin-bottom: 12px; }
+    .pin-content p { font-size: 0.95rem; color: var(--muted); line-height: 1.7; }
     .step { opacity: 0; }
   </style>
 </head>
@@ -399,7 +455,7 @@ gsap.to('.fg-layer', {
   </section>
 
   <section class="stat-section">
-    <h2 style="color:#f1f5f9; font-size:1.4rem;">By the Numbers</h2>
+    <h2>By the Numbers</h2>
     <div class="stats">
       <div class="stat"><div class="num" data-val="60">0</div><div class="label">Frames/sec</div></div>
       <div class="stat"><div class="num" data-val="300">0</div><div class="label">Plugins</div></div>
@@ -500,3 +556,6 @@ gsap.to('.fg-layer', {
 - **Text split without `display:inline-block`** — split spans must be `inline-block` for transform animations to work
 - **Missing `ease: 'none'` on scrubbed tweens** — scrubbed animations with easing feel wrong; use linear (`'none'`) when scrubbing
 - **Leaving `markers: true`** — remove debug markers before shipping; they render as visible colored lines
+- **Not honouring `prefers-reduced-motion`** — pinned panels, parallax, and scrub animations can trigger motion sickness; gate them behind `matchMedia('(prefers-reduced-motion: reduce)')` and reveal the final state directly
+- **Hard-coded dark colours in the page** — chained scrollytelling sections use literal `#0f1117`/`#f1f5f9` and break light-mode users; drive colours from CSS variables and define a light token block
+- **Animating with `text` content from user input** — `gsap.to(el, { innerText: userValue })` writes the value as HTML when it contains markup; coerce to string with `String(userValue)` and use `textContent` for trusted text

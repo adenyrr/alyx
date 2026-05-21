@@ -1,6 +1,7 @@
 ---
 name: plotly
 description: Create advanced, interactive scientific and statistical charts using Plotly.js, delivered as self-contained HTML artifacts. Use this skill for: box plots, violin plots, histograms, error bars, contour/heatmaps, 3D surfaces, 3D scatter, candlestick/OHLC financial charts, parallel coordinates, sunbursts, treemaps, funnel charts, waterfall charts, geographic choropleths, and scatter plots with 100K+ data points (WebGL mode). Also use when users need built-in zoom/pan, range sliders, lasso select, or image export. Trigger on keywords like "plot", "distribution", "correlation", "statistical", "3D chart", "financial chart", "candlestick", "box plot", "heatmap", "contour", or when the user's needs exceed simple bar/line/pie charts. Do NOT use for: standard dashboards/presentations with basic charts (→ chartjs skill), network graphs (→ vis-network skill), geographic maps with tiles/markers (→ leaflet skill), or bespoke SVG layouts (→ d3-charting skill).
+agents: [dev]
 ---
 
 # Plotly.js Skill — Advanced & Scientific Charts
@@ -68,6 +69,8 @@ For smaller bundle with only basic charts:
 
 ## Step 2 — HTML Artifact Shell
 
+The shell defines tokens for both dark and light themes and selects via `[data-theme]` or `prefers-color-scheme`.
+
 ```html
 <!DOCTYPE html>
 <html lang="en">
@@ -76,46 +79,83 @@ For smaller bundle with only basic charts:
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Chart Title</title>
   <style>
+    :root {
+      --bg:       #0f1117;
+      --card:     #1a1d27;
+      --border:   rgba(255,255,255,0.08);
+      --text:     #e2e8f0;
+      --title:    #f1f5f9;
+      --muted:    #64748b;
+      --accent:   #6366f1;
+      --grid:     rgba(255,255,255,0.06);
+      --tip-bg:   #1e293b;
+      --tip-bdr:  #334155;
+      --modebar-fill: #64748b;
+      --modebar-hover:#e2e8f0;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff;
+        --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --title: #0f172a; --muted: #475569;
+        --grid: rgba(0,0,0,0.06);
+        --tip-bg: #ffffff; --tip-bdr: #cbd5e1;
+        --modebar-fill: #475569; --modebar-hover: #0f172a;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff;
+      --border: rgba(0,0,0,0.08);
+      --text: #1e293b; --title: #0f172a; --muted: #475569;
+      --grid: rgba(0,0,0,0.06);
+      --tip-bg: #ffffff; --tip-bdr: #cbd5e1;
+      --modebar-fill: #475569; --modebar-hover: #0f172a;
+    }
+    [data-theme="dark"] {
+      --bg: #0f1117; --card: #1a1d27;
+      --border: rgba(255,255,255,0.08);
+      --text: #e2e8f0; --title: #f1f5f9; --muted: #64748b;
+      --grid: rgba(255,255,255,0.06);
+      --tip-bg: #1e293b; --tip-bdr: #334155;
+      --modebar-fill: #64748b; --modebar-hover: #e2e8f0;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      min-height: 100vh; padding: 24px;
     }
     .card {
-      width: 100%;
-      max-width: 960px;
-      background: #1a1d27;
-      border-radius: 16px;
-      padding: 32px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      width: 100%; max-width: 960px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 32px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.15);
     }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 24px; }
+    h1 { font-size: 1.15rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--muted); margin-bottom: 24px; }
     #chart { width: 100%; }
-
-    /* Plotly modebar — blend with dark theme */
+    /* Plotly modebar — blend with active theme */
     .modebar { top: 8px !important; right: 8px !important; }
-    .modebar-btn path { fill: #64748b !important; }
-    .modebar-btn:hover path { fill: #e2e8f0 !important; }
+    .modebar-btn path { fill: var(--modebar-fill) !important; }
+    .modebar-btn:hover path { fill: var(--modebar-hover) !important; }
+    /* Preserve focus-visible outlines for keyboard users */
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Chart Title</h1>
     <p class="sub">Data source or description · drag to zoom, double-click to reset</p>
-    <div id="chart"></div>
+    <div id="chart" role="img" aria-label="Interactive chart"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist@2.35.2/plotly.js"></script>
   <script>
-    // All Plotly code here
+    // All Plotly code here — see Step 3 for theme-aware layout
   </script>
 </body>
 </html>
@@ -123,34 +163,44 @@ For smaller bundle with only basic charts:
 
 ---
 
-## Step 3 — Dark Theme Reference
+## Step 3 — Theme Reference (Dark + Light)
 
-Plotly uses a `layout` object for theming. This dark layout should be used as the base for all charts:
+Plotly uses a `layout` object for theming. Build it from the active CSS-variable theme so the chart always matches the page.
 
 ```javascript
-const DARK_LAYOUT = {
-  paper_bgcolor: 'rgba(0,0,0,0)',
-  plot_bgcolor:  'rgba(0,0,0,0)',
-  font: { color: '#94a3b8', family: 'Segoe UI, system-ui, sans-serif', size: 13 },
-  margin: { t: 20, r: 20, b: 50, l: 60 },
-  xaxis: {
-    gridcolor:   'rgba(255,255,255,0.06)',
-    zerolinecolor: 'rgba(255,255,255,0.1)',
-    tickfont: { color: '#94a3b8' },
-  },
-  yaxis: {
-    gridcolor:   'rgba(255,255,255,0.06)',
-    zerolinecolor: 'rgba(255,255,255,0.1)',
-    tickfont: { color: '#94a3b8' },
-  },
-  hoverlabel: {
-    bgcolor: '#1e293b',
-    bordercolor: '#334155',
-    font: { color: '#e2e8f0', size: 13 },
-  },
-  colorway: ['#6366f1','#8b5cf6','#ec4899','#f43f5e','#f97316','#eab308','#22c55e','#06b6d4'],
-};
+// Read CSS tokens (works for both [data-theme] and prefers-color-scheme)
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const get = (n, fb) => (cs.getPropertyValue(n).trim() || fb);
+  return {
+    text:  get('--text',  '#94a3b8'),
+    muted: get('--muted', '#64748b'),
+    grid:  get('--grid',  'rgba(255,255,255,0.06)'),
+    tipBg: get('--tip-bg', '#1e293b'),
+    tipBd: get('--tip-bdr','#334155'),
+  };
+}
+
+function buildLayout() {
+  const t = readTheme();
+  return {
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor:  'rgba(0,0,0,0)',
+    font:    { color: t.muted, family: 'Segoe UI, system-ui, sans-serif', size: 13 },
+    margin:  { t: 20, r: 20, b: 50, l: 60 },
+    xaxis:   { gridcolor: t.grid, zerolinecolor: t.grid, tickfont: { color: t.muted } },
+    yaxis:   { gridcolor: t.grid, zerolinecolor: t.grid, tickfont: { color: t.muted } },
+    hoverlabel: { bgcolor: t.tipBg, bordercolor: t.tipBd, font: { color: t.text, size: 13 } },
+    colorway: ['#6366f1','#8b5cf6','#ec4899','#f43f5e','#f97316','#eab308','#22c55e','#06b6d4'],
+  };
+}
+
+// Re-style on theme change:
+matchMedia('(prefers-color-scheme: light)').addEventListener('change',
+  () => Plotly.relayout('chart', buildLayout()));
 ```
+
+**Contrast note:** muted axis text against the dark card (`#64748b` on `#1a1d27`) and light card (`#475569` on `#ffffff`) both satisfy WCAG AA (≥ 4.5:1).
 
 ### Color scales for heatmaps and surfaces
 
@@ -527,12 +577,16 @@ Plotly.react('chart', newTraces, newLayout, config);
 
 ## Common Mistakes to Avoid
 
-- **Opaque `paper_bgcolor` / `plot_bgcolor`** — set both to `rgba(0,0,0,0)` so the dark card background shows through; a white default instantly breaks the theme
+- **Opaque `paper_bgcolor` / `plot_bgcolor`** — set both to `rgba(0,0,0,0)` so the active card background shows through; a white default instantly breaks dark themes (and vice versa)
+- **Using deprecated `Plotly.plot`** — always use `Plotly.newPlot(div, data, layout, config)`; `Plotly.plot` was removed in v2
 - **Redundant layout title** — the HTML `<h1>` handles the main title; adding `layout.title` creates a cluttered double title (OK for subplot panel labels)
 - **Forgetting `responsive: true`** — always pass `{ responsive: true }` in the config object; without it the chart won't resize on window changes
+- **Hard-coded dark-only colours** — derive `font.color`, `gridcolor`, `hoverlabel.bgcolor` from CSS variables so the chart auto-adapts to `[data-theme="light"]`
 - **Using `scatter` for 100K+ points** — switch to `scattergl` for WebGL rendering; regular SVG-based scatter chokes above ~50K points
 - **Not removing `displaylogo`** — set `displaylogo: false` to hide the Plotly watermark and keep the modebar clean
 - **Ignoring `hovertemplate`** — default hover labels are often messy; use `hovertemplate: '<b>%{x}</b><br>%{y:,.0f}<extra></extra>'` for clean formatting
-- **3D scenes without explicit axis config** — always set `scene.xaxis`, `scene.yaxis`, `scene.zaxis` with matching dark colors; otherwise they default to white backgrounds
+- **3D scenes without explicit axis config** — always set `scene.xaxis`, `scene.yaxis`, `scene.zaxis` with matching theme colors; otherwise they default to white backgrounds
+- **No `role="img"` / `aria-label` on the chart div** — assistive tech sees only an empty `<div>`; always set both for screen-reader access
+- **Suppressing `:focus-visible` outlines on modebar buttons** — keyboard users rely on the focus ring; do not override `outline` to `none`
 - **Placing `<script>` before CDN** — always load `plotly-2.35.2.min.js` first, then your code
 - **Calling `Plotly.newPlot` on a non-existent div** — ensure the target `<div id="chart">` exists in the DOM before calling `Plotly.newPlot`

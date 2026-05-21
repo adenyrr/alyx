@@ -1,6 +1,7 @@
 ---
 name: fullcalendar
 description: Create interactive calendar views using FullCalendar, delivered as self-contained HTML artifacts. Use this skill whenever someone needs a calendar display — month, week, day, or list views — with events that can be clicked, dragged, resized, or loaded from data. Trigger on requests like "make a calendar", "create a schedule view", "build an event calendar", "display events on a calendar", "show a weekly planner", or any prompt needing temporal event visualization. Do NOT use for Gantt charts or timeline ranges (→ vis-timeline skill), date pickers (→ plain HTML input), or data charts over time (→ chartjs/d3 skill).
+agents: [dev]
 ---
 
 # FullCalendar Skill
@@ -94,22 +95,37 @@ An interactive calendar with clickable/draggable events, navigation arrows for m
     h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
     p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
 
-    /* ── FullCalendar Dark Theme ── */
+    /* ── FullCalendar Dark Theme (default) ── */
     .fc { --fc-border-color: rgba(255,255,255,0.08); --fc-page-bg-color: transparent; --fc-neutral-bg-color: rgba(255,255,255,0.03); --fc-today-bg-color: rgba(99,102,241,0.08); }
     .fc .fc-toolbar-title { font-size: 1rem; color: #f1f5f9; }
     .fc .fc-button { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); color: #94a3b8; font-size: 12px; border-radius: 6px; padding: 4px 12px; }
     .fc .fc-button:hover { background: rgba(255,255,255,0.1); color: #f1f5f9; }
+    .fc .fc-button:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
     .fc .fc-button-active { background: #6366f1 !important; color: #fff !important; border-color: #6366f1 !important; }
     .fc .fc-col-header-cell { background: rgba(255,255,255,0.03); }
     .fc .fc-col-header-cell-cushion { color: #94a3b8; font-size: 12px; font-weight: 500; text-decoration: none; }
     .fc .fc-daygrid-day-number { color: #94a3b8; font-size: 12px; text-decoration: none; }
     .fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number { color: #6366f1; font-weight: 700; }
     .fc .fc-event { border: none; border-radius: 4px; padding: 1px 4px; font-size: 11px; }
+    .fc .fc-event:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
     .fc .fc-timegrid-slot { border-color: rgba(255,255,255,0.05); }
     .fc .fc-timegrid-axis-cushion { color: #64748b; font-size: 11px; }
     .fc .fc-list-event:hover td { background: rgba(255,255,255,0.05); }
     .fc .fc-popover { background: #1a1d27; border: 1px solid rgba(255,255,255,0.1); }
     .fc .fc-popover-header { background: rgba(255,255,255,0.03); color: #94a3b8; }
+
+    /* ── Light theme overrides (auto via prefers-color-scheme or [data-theme="light"]) ── */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) body { background: #f8fafc; color: #1e293b; }
+      :root:not([data-theme="dark"]) .card { background: #ffffff; box-shadow: 0 8px 40px rgba(15,23,42,0.08); }
+      :root:not([data-theme="dark"]) h1 { color: #0f172a; }
+      :root:not([data-theme="dark"]) .fc { --fc-border-color: rgba(0,0,0,0.08); --fc-neutral-bg-color: rgba(0,0,0,0.03); --fc-today-bg-color: rgba(99,102,241,0.10); }
+      :root:not([data-theme="dark"]) .fc .fc-toolbar-title,
+      :root:not([data-theme="dark"]) .fc .fc-col-header-cell-cushion,
+      :root:not([data-theme="dark"]) .fc .fc-daygrid-day-number { color: #1e293b; }
+      :root:not([data-theme="dark"]) .fc .fc-button { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.10); color: #475569; }
+      :root:not([data-theme="dark"]) .fc .fc-popover { background: #ffffff; border-color: rgba(0,0,0,0.10); }
+    }
   </style>
 </head>
 <body>
@@ -456,3 +472,6 @@ eventClassNames: (arg) => {
 - **Toolbar overflow on mobile** — the default toolbar with many buttons wraps badly; simplify for mobile or use responsive views
 - **Popover not dark-themed** — the "+N more" popover has its own styles; override `.fc-popover` and `.fc-popover-header`
 - **Not unselecting** — call `calendar.unselect()` after handling the `select` event to clear the visual highlight
+- **No accessibility label on the calendar container** — wrap `#calendar` with `role="application"` and `aria-label="Event calendar"`; FullCalendar exposes ARIA but the container itself benefits from a name
+- **Suppressing the focus ring on toolbar buttons** — `.fc-button` is the only keyboard entry point to month/week navigation; keep a `:focus-visible` outline so keyboard users can navigate
+- **Light-mode users see broken contrast** — the default CSS variables overwrite well in dark mode but the muted greys become unreadable on a white page. Provide a light token set or gate the overrides behind `prefers-color-scheme: light`

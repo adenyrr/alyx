@@ -1,6 +1,7 @@
 ---
 name: konva-canvas
 description: Create interactive 2D canvas graphics using Konva.js, delivered as self-contained HTML artifacts. Use this skill whenever someone needs a 2D drawing canvas with draggable shapes, image editing, text overlays, freehand drawing, export to PNG/JSON, or any interactive graphics application that needs hit detection and layering but not 3D. Trigger on requests like "make a drawing app", "create a canvas editor", "build a photo annotator", "design a badge/certificate maker", "create a shape editor", or any prompt needing interactive 2D canvas manipulation. Do NOT use for 3D scenes (→ threejs-3d skill), flowcharts/diagrams with connections (→ jointjs-flowchart skill), or generative art (→ p5js-creative-coding skill).
+agents: [dev]
 ---
 
 # Konva.js Canvas Skill
@@ -105,22 +106,35 @@ An interactive canvas where shapes, images, and text can be dragged, resized, an
       overflow: hidden;
       background: #0f1117;
     }
+
+    /* Light theme overrides */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) body { background: #f8fafc; color: #1e293b; }
+      :root:not([data-theme="dark"]) .card { background: #ffffff; box-shadow: 0 8px 40px rgba(15,23,42,0.08); }
+      :root:not([data-theme="dark"]) h1 { color: #0f172a; }
+      :root:not([data-theme="dark"]) #canvas-container { background: #ffffff; border-color: rgba(0,0,0,0.08); }
+      :root:not([data-theme="dark"]) .toolbar button { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.10); color: #475569; }
+    }
+
+    /* Keyboard focus for toolbar */
+    .toolbar button:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Editor Title</h1>
-    <p class="sub">Drag shapes · click to select · use handles to resize/rotate</p>
-    <div class="toolbar">
-      <button id="btn-rect">Rectangle</button>
-      <button id="btn-circle">Circle</button>
-      <button id="btn-text">Text</button>
-      <button id="btn-export">Export PNG</button>
+    <p class="sub">Drag shapes · click to select · use handles to resize/rotate · Delete key removes selection</p>
+    <div class="toolbar" role="toolbar" aria-label="Drawing tools">
+      <button id="btn-rect"   aria-label="Add rectangle">Rectangle</button>
+      <button id="btn-circle" aria-label="Add circle">Circle</button>
+      <button id="btn-text"   aria-label="Add text">Text</button>
+      <button id="btn-export" aria-label="Export canvas as PNG">Export PNG</button>
     </div>
-    <div id="canvas-container"></div>
+    <!-- The canvas itself is opaque to screen readers; describe it explicitly -->
+    <div id="canvas-container" role="application" aria-label="Drawing canvas"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js" crossorigin="anonymous"></script>
   <script>
     // All Konva code here
   </script>
@@ -396,23 +410,24 @@ stage.on('mouseup touchend', () => {
 ## Step 11 — Export
 
 ```javascript
-// Export to PNG
+// Export to PNG (dataURL has no separate URL to revoke)
 function exportPNG() {
   const dataURL = stage.toDataURL({ pixelRatio: 2 });
   const a = document.createElement('a');
   a.href = dataURL;
   a.download = 'canvas.png';
-  a.click();
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
-// Export to JSON
+// Export to JSON — always revoke the blob URL after the click fires
 function exportJSON() {
   const json = stage.toJSON();
   const blob = new Blob([json], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'canvas.json';
-  a.click();
+  a.href = url; a.download = 'canvas.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);   // free memory
 }
 
 // Import from JSON
@@ -443,22 +458,57 @@ function importJSON(jsonString) {
 
 ```html
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Shape Editor</title>
   <style>
+    :root, [data-theme="dark"] {
+      --bg:        #0f1117;
+      --card:      #1a1d27;
+      --border:    rgba(255,255,255,0.08);
+      --text:      #e2e8f0;
+      --heading:   #f1f5f9;
+      --muted:     #94a3b8;
+      --subtle:    #64748b;
+      --accent:    #6366f1;
+      --btn-bg:    rgba(255,255,255,0.06);
+      --btn-hover: rgba(255,255,255,0.1);
+      --shadow:    0 8px 40px rgba(0,0,0,0.5);
+    }
+    [data-theme="light"] {
+      --bg:        #f8fafc;
+      --card:      #ffffff;
+      --border:    rgba(0,0,0,0.08);
+      --text:      #1e293b;
+      --heading:   #0f172a;
+      --muted:     #475569;
+      --subtle:    #64748b;
+      --accent:    #6366f1;
+      --btn-bg:    rgba(15,23,42,0.04);
+      --btn-hover: rgba(15,23,42,0.08);
+      --shadow:    0 8px 40px rgba(15,23,42,0.08);
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme]) {
+        --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --heading: #0f172a; --muted: #475569;
+        --btn-bg: rgba(15,23,42,0.04); --btn-hover: rgba(15,23,42,0.08);
+        --shadow: 0 8px 40px rgba(15,23,42,0.08);
+      }
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
-    .card { background: #1a1d27; border-radius: 16px; padding: 24px; width: 100%; max-width: 850px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 14px; }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; transition: background 200ms, color 200ms; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 24px; width: 100%; max-width: 850px; box-shadow: var(--shadow); }
+    h1 { font-size: 1.15rem; font-weight: 600; color: var(--heading); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--subtle); margin-bottom: 14px; }
     .toolbar { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-    .toolbar button { background: rgba(255,255,255,0.06); color: #94a3b8; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 6px 12px; font-size: 11px; cursor: pointer; transition: all 0.15s; }
-    .toolbar button:hover { background: rgba(255,255,255,0.1); color: #f1f5f9; }
-    .toolbar button.active { background: #6366f1; color: #fff; border-color: #6366f1; }
-    #canvas-container { width: 100%; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; overflow: hidden; }
+    .toolbar button { background: var(--btn-bg); color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+    .toolbar button:hover { background: var(--btn-hover); color: var(--heading); }
+    .toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    #canvas-container { width: 100%; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   </style>
 </head>
 <body>
@@ -481,7 +531,12 @@ function importJSON(jsonString) {
   <script>
     const WIDTH = document.getElementById('canvas-container').offsetWidth;
     const HEIGHT = 420;
-    const COLORS = ['#6366f1','#8b5cf6','#ec4899','#22c55e','#06b6d4','#f97316'];
+    // Canvas is bitmap/pixel-based, so shape fills don't auto-respond to CSS
+    // theme changes. Keep these as fixed brand tokens; only DOM/UI around the
+    // canvas (toolbar, card) is driven by var(--*) above.
+    const INDIGO = '#6366f1', VIOLET = '#8b5cf6', PINK = '#ec4899',
+          GREEN  = '#22c55e', CYAN   = '#06b6d4', ORANGE = '#f97316';
+    const COLORS = [INDIGO, VIOLET, PINK, GREEN, CYAN, ORANGE];
     let colorIdx = 0;
     const nextColor = () => COLORS[colorIdx++ % COLORS.length];
 
@@ -534,8 +589,12 @@ function importJSON(jsonString) {
         document.body.appendChild(ta);
         const rect = t.getClientRect();
         const stageBox = stage.container().getBoundingClientRect();
+        // Read live theme tokens so the inline editor matches dark/light.
+        const css = getComputedStyle(document.documentElement);
+        const fg = css.getPropertyValue('--heading').trim() || '#f1f5f9';
+        const bg = css.getPropertyValue('--card').trim()    || '#1a1d27';
         ta.value = t.text();
-        ta.style.cssText = `position:fixed;top:${stageBox.top+rect.y}px;left:${stageBox.left+rect.x}px;font-size:${t.fontSize()}px;color:#f1f5f9;background:#1a1d27;border:1px solid #6366f1;border-radius:6px;outline:none;padding:4px;resize:none;z-index:1000;`;
+        ta.style.cssText = `position:fixed;top:${stageBox.top+rect.y}px;left:${stageBox.left+rect.x}px;font-size:${t.fontSize()}px;color:${fg};background:${bg};border:1px solid #6366f1;border-radius:6px;outline:none;padding:4px;resize:none;z-index:1000;`;
         ta.focus();
         ta.addEventListener('blur', () => { t.text(ta.value); ta.remove(); layer.draw(); });
       });
@@ -607,3 +666,7 @@ function importJSON(jsonString) {
 - **Cross-origin images** — set `imageObj.crossOrigin = 'anonymous'` before setting `src` to enable `toDataURL()` export with images
 - **Not using `batchDraw()`** — during continuous events (freehand drawing, dragging), `batchDraw()` batches renders for performance; `draw()` is immediate
 - **Forgetting touch events** — always handle both `mousedown/mousemove/mouseup` and `touchstart/touchmove/touchend` for mobile
+- **Leaking blob URLs on JSON export** — pair every `URL.createObjectURL(blob)` with `URL.revokeObjectURL(url)` once the click fires; otherwise the blob lives for the page's lifetime
+- **No `role="application"` or `aria-label` on the canvas container** — the canvas is invisible to assistive tech; add it so screen-reader users at least hear what the region is
+- **Hard-coded `#0f1117` canvas background** — breaks on light pages; read the theme at startup and set Konva's background layer accordingly, or use a transparent stage and let the surrounding CSS provide the colour
+- **Suppressing toolbar focus rings** — keyboard users navigate buttons with Tab; keep `button:focus-visible { outline }` rather than `outline: none`

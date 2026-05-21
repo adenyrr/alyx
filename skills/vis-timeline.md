@@ -1,6 +1,7 @@
 ---
 name: vis-timeline
 description: Create interactive, fully customizable timeline visualizations using vis-timeline, delivered as self-contained HTML artifacts. Use this skill whenever someone needs to display events, milestones, project schedules, historical data, or any data series positioned along a time axis — with or without groups/lanes. Trigger on any request mentioning timelines, Gantt-like charts, chronologies, project planning views, event sequences, historical visualizations, or roadmaps. Prefer this skill over generic charting tools whenever the primary axis is time and items need to be placed, dragged, or explored interactively.
+agents: [dev]
 ---
 
 # vis-timeline Skill
@@ -56,8 +57,8 @@ vis-timeline **always** requires both a JS file and a CSS file. Missing the CSS 
 
 ```html
 <!-- Standalone build: self-contained, no extra dependencies -->
-<script src="https://unpkg.com/vis-timeline@latest/standalone/umd/vis-timeline-graph2d.min.js"></script>
-<link  href="https://unpkg.com/vis-timeline@latest/styles/vis-timeline-graph2d.min.css" rel="stylesheet" />
+<script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+<link  href="https://unpkg.com/vis-timeline@7.7.3/styles/vis-timeline-graph2d.min.css" rel="stylesheet" />
 ```
 
 The standalone build bundles all dependencies (including Moment.js). Use it for single-file artifacts. The `vis` global is available after loading.
@@ -77,53 +78,83 @@ The timeline container **must have an explicit height**. It will fill the availa
   <title>Timeline</title>
 
   <!-- vis-timeline: JS + CSS both required -->
-  <script src="https://unpkg.com/vis-timeline@latest/standalone/umd/vis-timeline-graph2d.min.js"></script>
-  <link  href="https://unpkg.com/vis-timeline@latest/styles/vis-timeline-graph2d.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+  <link  href="https://unpkg.com/vis-timeline@7.7.3/styles/vis-timeline-graph2d.min.css" rel="stylesheet" />
 
   <style>
+    :root {
+      --bg:       #0f1117;
+      --card:     #1a1d27;
+      --border:   rgba(255,255,255,0.08);
+      --text:     #e2e8f0;
+      --title:    #f1f5f9;
+      --muted:    #94a3b8;
+      --xmuted:   #64748b;
+      --axis-fg:  #94a3b8;
+      --grid-minor: rgba(255,255,255,0.05);
+      --grid-major: rgba(255,255,255,0.1);
+      --label-bg: #1a1d27;
+      --now:      #f43f5e;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff;
+        --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --title: #0f172a;
+        --muted: #475569; --xmuted: #475569;
+        --axis-fg: #475569;
+        --grid-minor: rgba(0,0,0,0.06);
+        --grid-major: rgba(0,0,0,0.12);
+        --label-bg: #ffffff;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff;
+      --border: rgba(0,0,0,0.08);
+      --text: #1e293b; --title: #0f172a;
+      --muted: #475569; --xmuted: #475569;
+      --axis-fg: #475569;
+      --grid-minor: rgba(0,0,0,0.06);
+      --grid-major: rgba(0,0,0,0.12);
+      --label-bg: #ffffff;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 24px;
+      background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 100vh; padding: 24px;
     }
     .card {
-      background: #1a1d27;
-      border-radius: 16px;
-      padding: 32px;
-      width: 100%;
-      max-width: 1000px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 32px;
+      width: 100%; max-width: 1000px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.15);
     }
-    h1 { font-size: 1.2rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
+    h1 { font-size: 1.2rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--xmuted); margin-bottom: 20px; }
 
     /* Container: MUST have explicit height */
     #timeline { width: 100%; height: 300px; }
 
-    /* ── Dark theme overrides ───────────────────────────── */
-    .vis-timeline { border: 1px solid rgba(255,255,255,0.08) !important; border-radius: 8px; background: #1a1d27; }
-    .vis-time-axis .vis-text { color: #94a3b8 !important; }
-    .vis-time-axis .vis-grid.vis-minor { border-color: rgba(255,255,255,0.05) !important; }
-    .vis-time-axis .vis-grid.vis-major { border-color: rgba(255,255,255,0.1) !important; }
+    /* ── Theme overrides (CSS variables drive both dark and light) ── */
+    .vis-timeline { border: 1px solid var(--border) !important; border-radius: 8px; background: var(--card); }
+    .vis-time-axis .vis-text             { color: var(--axis-fg) !important; }
+    .vis-time-axis .vis-grid.vis-minor   { border-color: var(--grid-minor) !important; }
+    .vis-time-axis .vis-grid.vis-major   { border-color: var(--grid-major) !important; }
     .vis-panel.vis-center,
     .vis-panel.vis-left,
-    .vis-panel.vis-right { border-color: rgba(255,255,255,0.08) !important; }
-    .vis-label { color: #94a3b8 !important; background: #1a1d27 !important; border-right: 1px solid rgba(255,255,255,0.08) !important; }
-    .vis-current-time { background: #f43f5e !important; }
+    .vis-panel.vis-right                 { border-color: var(--border) !important; }
+    .vis-label { color: var(--axis-fg) !important; background: var(--label-bg) !important; border-right: 1px solid var(--border) !important; }
+    .vis-current-time { background: var(--now) !important; }
+    :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Project Timeline</h1>
-    <p class="sub">Interactive — scroll to zoom, drag to pan</p>
-    <div id="timeline"></div>
+    <p class="sub">Interactive — scroll to zoom, drag to pan, click to select</p>
+    <div id="timeline" role="region" aria-label="Project timeline" tabindex="0"></div>
   </div>
 
   <script>
@@ -496,8 +527,8 @@ const options = {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Project Timeline</title>
-  <script src="https://unpkg.com/vis-timeline@latest/standalone/umd/vis-timeline-graph2d.min.js"></script>
-  <link  href="https://unpkg.com/vis-timeline@latest/styles/vis-timeline-graph2d.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+  <link  href="https://unpkg.com/vis-timeline@7.7.3/styles/vis-timeline-graph2d.min.css" rel="stylesheet" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
@@ -599,8 +630,12 @@ const options = {
 
 - **Missing CSS file** — the most frequent issue; the timeline renders broken without `vis-timeline-graph2d.min.css`
 - **No explicit height on container** — the `#timeline` div must have a CSS height set; `height: auto` renders nothing
+- **Hard-coded dark colours** — derive `vis-label`, `vis-time-axis`, `vis-grid` overrides from CSS variables so the timeline auto-adapts to `[data-theme="light"]` and `prefers-color-scheme: light`
 - **Passing plain Arrays instead of DataSet** — both work for initial load, but only `vis.DataSet` supports live `.add()` / `.update()` / `.remove()`
 - **Date strings without timezone** — use ISO format `'2025-03-15'` (date only) or `'2025-03-15T09:00:00'` to avoid timezone offset bugs
-- **`content` is HTML** — sanitize any user-provided strings before passing to `content` to prevent XSS
+- **`content` is HTML** — sanitize any user-provided strings before passing to `content` to prevent XSS. Never inject raw user text via `innerHTML`-style fields; escape `<` / `>` / `&`
 - **Forgetting `.destroy()`** — on SPA route changes, call `timeline.destroy()` to remove event listeners and DOM nodes
+- **No `role` / `aria-label` / `tabindex` on the container** — assistive tech sees only a `<div>`; set `role="region"`, an `aria-label`, and `tabindex="0"` so keyboard users can pan with arrow keys
+- **Suppressing focus-visible outlines on items** — keyboard users tab through items; preserve `:focus-visible` so the active item is obvious
+- **Ignoring `prefers-reduced-motion`** — zoom and `setWindow({ animation: … })` calls produce smooth panning that some users want disabled; pass `{ animation: false }` when reduced motion is requested
 - **CSS specificity fights** — vis-timeline uses inline styles for some elements; use `!important` in custom CSS when overriding doesn't work

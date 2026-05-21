@@ -1,6 +1,7 @@
 ---
 name: shadcn-ui
 description: Build polished, accessible React interfaces using shadcn/ui components, delivered as React artifacts (.jsx). Use this skill whenever someone needs a production-quality React UI with pre-built accessible components: dashboards, settings panels, forms with validation, data tables, modals, command palettes, sidebars, or any complex interactive UI. Trigger on requests like "build a settings page", "create a dashboard with tabs and cards", "make a dialog with a form", "build a data table with filtering", "create a command palette", or any React UI request that would benefit from ready-made accessible components. shadcn/ui shines for polished, complex interfaces where accessibility, keyboard navigation, and visual consistency matter. Do NOT use for static HTML pages (→ bulma-css or tailwind-css), raw canvas/WebGL (→ threejs-3d or p5js), or data visualization charts (→ charting skill).
+agents: [dev]
 ---
 
 # shadcn/ui Skill — React Artifacts
@@ -74,14 +75,32 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
 ## Step 2 — React Artifact Shell
 
+shadcn/ui design tokens live as CSS variables on `:root` and `.dark` — pair them so the same components render correctly in dark **and** light mode. Use the system preference unless the user explicitly toggles.
+
 ```jsx
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
+// Reference palette aligned with the rest of the Alyx skill suite
+// DARK : bg #0f1117, card #1a1d27, border rgba(255,255,255,0.08), text #e2e8f0, muted #94a3b8, accent #6366f1
+// LIGHT: bg #f8fafc, card #ffffff, border rgba(0,0,0,0.08), text #1e293b, muted #475569, accent #6366f1
+
 export default function App() {
+  // Apply the .dark class to <html> based on prefers-color-scheme (or a user toggle).
+  useEffect(() => {
+    const mql = matchMedia('(prefers-color-scheme: dark)')
+    const apply = () => document.documentElement.classList.toggle('dark', mql.matches)
+    apply()
+    mql.addEventListener('change', apply)
+    return () => mql.removeEventListener('change', apply)
+  }, [])
+
   return (
-    <div className="min-h-screen bg-background text-foreground p-6">
+    <div
+      className="min-h-screen bg-background text-foreground p-6"
+      role="main"
+    >
       {/* Your UI here */}
     </div>
   )
@@ -533,15 +552,18 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 ## Step 5 — Design & Polish Guidelines
 
-- **Dark theme via CSS variables** — define `--background`, `--foreground`, `--card`, `--muted`, `--accent`, `--primary` in the root style; all shadcn components inherit these
-- **Consistent spacing** — use Tailwind’s spacing scale (`p-4`, `gap-6`, `mb-3`) rather than arbitrary pixel values
-- **Accessible by default** — shadcn components include ARIA attributes, keyboard navigation, and focus rings; do not override `outline` styles
+- **Theme via CSS variables (dark + light)** — define `--background`, `--foreground`, `--card`, `--muted`, `--accent`, `--primary` on `:root` (light defaults) and override them in `.dark { … }` (dark values). All shadcn components inherit the active set, so a single `<html>` class toggle flips the whole UI
+- **Consistent spacing** — use Tailwind's spacing scale (`p-4`, `gap-6`, `mb-3`) rather than arbitrary pixel values
+- **Accessible by default** — shadcn components include ARIA attributes, keyboard navigation, and focus rings; **do not override `outline` / `:focus-visible` styles**
 - **Composition over customization** — compose small components (`Card` + `CardHeader` + `CardContent`) rather than building monolithic components
 - **Form patterns** — pair `<Label>` with `<Input>` using `htmlFor`/`id`; group related fields in `<div className="space-y-2">`
+- **Tabs/RadioGroup keyboard** — Radix handles arrow-key navigation between `TabsTrigger` / `RadioGroupItem` siblings out-of-the-box; preserve native semantics by not adding your own `onKeyDown` handlers
 - **Dialog focus** — `<Dialog>` automatically traps focus and returns it on close; do not add custom focus management
+- **Reduced motion** — wrap any custom animation in a `prefers-reduced-motion: reduce` guard; Radix primitives already honour the user's setting
+- **Contrast check** — body text uses `text-foreground` (≥ 4.5:1 against `bg-background` in both themes); muted text uses `text-muted-foreground` (≥ 4.5:1) — never go below
 - **Loading states** — use `disabled` prop on `<Button>` during async operations; add a spinner icon inside the button
 - **Toast notifications** — use `sonner` for ephemeral feedback; place `<Toaster />` once at the root level
-- **Responsive layout** — use Tailwind’s responsive prefixes (`sm:grid-cols-2 lg:grid-cols-3`) on grid containers
+- **Responsive layout** — use Tailwind's responsive prefixes (`sm:grid-cols-2 lg:grid-cols-3`) on grid containers
 
 ---
 
@@ -724,3 +746,6 @@ export default function Settings() {
 - **Putting content in `Dialog` outside `DialogContent`** — the visible modal content must be inside `<DialogContent>`. Content accidentally placed outside (e.g., as sibling of `DialogTrigger`) will appear inline in the page, not in the modal
 - **`localStorage` in artifacts** — browser storage APIs are not supported in Claude artifacts. Use `useState` or `useReducer` to persist state within a session instead
 - **Expecting server-side features** — shadcn/ui in artifacts is a client-side React environment. There is no server, no `next/dynamic`, no server components, no file system access. All data must be hardcoded or generated in component state
+- **Suppressing focus rings** — `outline: none` or `focus:outline-none` (without a replacement ring) breaks keyboard accessibility; always keep `:focus-visible` styles or replace with `focus-visible:ring-2`
+- **Only dark tokens defined** — define both `:root { … }` (light) and `.dark { … }` (dark) palettes and toggle the `.dark` class on `<html>` — shadcn ships this dual-token pattern as the recommended default
+- **Custom `onKeyDown` on tabs/radio** — Radix already implements arrow-key navigation; replacing it usually breaks WAI-ARIA semantics

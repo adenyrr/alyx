@@ -1,6 +1,7 @@
 ---
 name: threejs-3d
 description: Create immersive, interactive 3D scenes and animations using Three.js r183, delivered as self-contained HTML artifacts. Use this skill whenever someone needs real-time 3D graphics in the browser: rotating objects, particle systems, procedural geometry, abstract 3D art, product visualisations, interactive 3D data visualisation, physics-like simulations, shader effects, or any scene requiring depth, lighting, and perspective. Trigger on requests like "create a 3D scene", "make a spinning object", "build a particle system", "generate 3D abstract art", "visualise data in 3D", or any prompt that evokes spatial depth and real-time rendering. Do NOT use for flat 2D canvas art (→ p5.js skill), geographic maps (→ leaflet skill), or charts and graphs (→ charting skill).
+agents: [dev]
 ---
 
 # Three.js 3D Skill — r183
@@ -110,30 +111,55 @@ import { TextGeometry }      from 'three/addons/geometries/TextGeometry.js';    
   </script>
 
   <style>
+    :root {
+      --bg:    #0f1117;
+      --card:  rgba(26,29,39,0.85);
+      --bdr:   rgba(255,255,255,0.08);
+      --muted: #94a3b8;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card: rgba(255,255,255,0.9);
+        --bdr: rgba(0,0,0,0.08);
+        --muted: #475569;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --card: rgba(255,255,255,0.9);
+      --bdr: rgba(0,0,0,0.08);
+      --muted: #475569;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0f1117; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
-
+    body { background: var(--bg); overflow: hidden; font-family: 'Segoe UI', sans-serif; }
     /* Canvas fills the viewport */
     canvas { display: block; width: 100vw; height: 100vh; }
-
     /* Optional HUD overlay */
     #hud {
       position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-      background: rgba(26,29,39,0.85); backdrop-filter: blur(10px);
-      border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
-      padding: 10px 20px; color: #94a3b8; font-size: 12px;
+      background: var(--card); backdrop-filter: blur(10px);
+      border: 1px solid var(--bdr); border-radius: 10px;
+      padding: 10px 20px; color: var(--muted); font-size: 12px;
       pointer-events: none;
     }
+    :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
   </style>
 </head>
 <body>
-  <div id="hud">Drag to orbit · Scroll to zoom</div>
+  <div id="hud" role="status">Drag to orbit · Scroll to zoom</div>
 
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
-    // All Three.js code here
+    // All Three.js code here — see Step 3 onward
+    // The renderer's canvas should receive aria-label after creation:
+    //   renderer.domElement.setAttribute('aria-label', 'Interactive 3D scene');
+    //   renderer.domElement.setAttribute('role', 'img');
+    //   renderer.domElement.tabIndex = 0; // make focusable for keyboard users
+    // Honour prefers-reduced-motion:
+    //   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    //   controls.autoRotate = !reduce;
   </script>
 </body>
 </html>
@@ -148,8 +174,23 @@ Every Three.js scene requires exactly these three objects, set up in this order:
 ```javascript
 // 1. Scene — the container for all objects, lights, and fog
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0f1117);   // dark background
-// scene.fog = new THREE.Fog(0x0f1117, 10, 50);  // optional depth fog
+
+// Read the page's --bg CSS variable so the 3D viewport matches dark/light theme.
+// Falls back to the artifact's dark token if the variable isn't set.
+function applyTheme(scene, renderer) {
+  const bg = getComputedStyle(document.documentElement)
+    .getPropertyValue('--bg').trim() || '#0f1117';
+  scene.background = new THREE.Color(bg);
+  if (renderer) renderer.setClearColor(bg, 1);
+  // If you use fog, keep it in sync with the background colour:
+  // if (scene.fog) scene.fog.color.set(bg);
+}
+applyTheme(scene);   // initial paint — renderer wired below
+
+// Re-apply when the OS preference flips OR when <html data-theme> changes.
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(scene, renderer));
+new MutationObserver(() => applyTheme(scene, renderer))
+  .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 // 2. Camera — defines what we see and from where
 const camera = new THREE.PerspectiveCamera(
@@ -194,6 +235,7 @@ new THREE.BoxGeometry(w, h, d)                          // cube / cuboid
 new THREE.SphereGeometry(radius, widthSegs, heightSegs) // sphere (min 32, 32 for smooth)
 new THREE.PlaneGeometry(w, h, wSegs, hSegs)             // flat plane / ground
 new THREE.CylinderGeometry(rTop, rBottom, height, segs) // cylinder / cone (rTop=0)
+new THREE.CapsuleGeometry(radius, length, capSegs, radialSegs)  // capsule (since r142, available in r183)
 new THREE.TorusGeometry(radius, tube, radialSegs, tubularSegs)  // donut ring
 new THREE.TorusKnotGeometry(radius, tube, tubularSegs, radialSegs, p, q)  // knot
 new THREE.IcosahedronGeometry(radius, detail)           // low-poly sphere (detail 0=20 faces)
@@ -574,14 +616,32 @@ scene.add(instancedMesh);
   }
   </script>
   <style>
+    :root {
+      --bg: #030508;
+      --hud-bg: rgba(15,17,23,0.8);
+      --hud-bd: rgba(255,255,255,0.06);
+      --hud-fg: #475569;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --hud-bg: rgba(255,255,255,0.85);
+        --hud-bd: rgba(0,0,0,0.08);
+        --hud-fg: #475569;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --hud-bg: rgba(255,255,255,0.85);
+      --hud-bd: rgba(0,0,0,0.08); --hud-fg: #475569;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #030508; overflow: hidden; }
+    body { background: var(--bg); overflow: hidden; }
     canvas { display: block; }
     #ui {
       position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-      background: rgba(15,17,23,0.8); backdrop-filter: blur(10px);
-      border: 1px solid rgba(255,255,255,0.06); border-radius: 10px;
-      padding: 10px 20px; color: #475569; font-size: 12px; font-family: 'Segoe UI', sans-serif;
+      background: var(--hud-bg); backdrop-filter: blur(10px);
+      border: 1px solid var(--hud-bd); border-radius: 10px;
+      padding: 10px 20px; color: var(--hud-fg); font-size: 12px; font-family: 'Segoe UI', sans-serif;
       pointer-events: none; white-space: nowrap;
     }
   </style>
@@ -604,6 +664,20 @@ scene.add(instancedMesh);
     // ── Scene & Camera ────────────────────────────────
     const scene  = new THREE.Scene();
     scene.fog    = new THREE.FogExp2(0x030508, 0.035);
+
+    // Theme-aware background: read --bg from CSS variables, sync on theme change.
+    function applyTheme() {
+      const bg = getComputedStyle(document.documentElement)
+        .getPropertyValue('--bg').trim() || '#030508';
+      const c = new THREE.Color(bg);
+      scene.background = c;
+      renderer.setClearColor(c, 1);
+      if (scene.fog) scene.fog.color.copy(c);
+    }
+    applyTheme();
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyTheme);
+    new MutationObserver(applyTheme).observe(document.documentElement,
+      { attributes: true, attributeFilter: ['data-theme'] });
 
     const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 200);
     camera.position.set(0, 4, 12);
@@ -718,13 +792,15 @@ scene.add(instancedMesh);
 
 ## Step 15 — Common Mistakes to Avoid
 
-- **Old UMD `<script src="three.min.js">` pattern** — Three.js dropped the UMD build as the primary distribution after r134. Use the importmap + ES module pattern. The old `THREE.OrbitControls` (not from addons) no longer exists
+- **Old UMD `<script src="three.min.js">` pattern** — Three.js dropped the UMD build as the primary distribution after r134. Use the importmap + ES module pattern. The old `THREE.OrbitControls` (not from addons) no longer exists — `OrbitControls` is only available via `three/addons/controls/OrbitControls.js`
 - **Missing `type="module"` on the script tag** — import maps only work with `<script type="module">`. A plain `<script>` tag will fail with a syntax error on `import` statements
-- **Version mismatch between core and addons** — always pin to the same version: `three@0.183.2` core and `three@0.183.2` in the addons path
+- **Version mismatch between core and addons** — always pin to the same version: `three@0.183.2` core and `three@0.183.2` in the `three/addons/` path. Mixed versions silently break — symptoms range from missing exports to wrong matrix semantics
 - **`clock.getDelta()` called multiple times per frame** — it resets its internal timer on each call; always call it exactly once, at the very start of `animate()`
 - **Forgetting `controls.update()` when `enableDamping: true`** — without this call in the animation loop, damping won't work and the camera will freeze
 - **Creating objects inside `animate()`** — `new THREE.Vector3()`, `new THREE.Color()`, `new THREE.Matrix4()` inside the loop trigger garbage collection every frame; declare and reuse them outside
 - **Not setting `depthWrite: false` on additive/transparent particles** — without it, particles incorrectly occlude each other and the blending breaks
-- **No `renderer.setPixelRatio(Math.min(devicePixelRatio, 2))`** — on Retina/HiDPI displays the canvas will be blurry; on 4K screens without the cap, performance will tank
+- **`renderer.setPixelRatio(devicePixelRatio)` uncapped** — on 4K and tablet retina displays this quadruples GPU load. Always cap: `renderer.setPixelRatio(Math.min(devicePixelRatio, 2))`. Also re-apply this inside the resize handler — some browsers reset pixel ratio after `setSize()`
+- **Ignoring `prefers-reduced-motion`** — auto-rotate, continuous camera moves, and heavy particle motion can trigger motion sickness. Read `matchMedia('(prefers-reduced-motion: reduce)').matches` and disable `controls.autoRotate` and/or freeze the loop on first frame
+- **No `aria-label` / `tabIndex` on the canvas** — assistive tech sees only "canvas"; set `renderer.domElement.setAttribute('aria-label', '…')`, `role="img"`, and `tabIndex = 0` so keyboard users can focus and OrbitControls' keyboard arrows respond
 - **`geometry.dispose()` and `material.dispose()` neglected** — GPU memory is not freed automatically when you remove meshes from the scene; always call dispose on cleanup
-- **`scene.background = new THREE.Color(...)` conflicts with `renderer.setClearColor`** — use one or the other, not both; `scene.background` takes priority
+- **`scene.background = new THREE.Color(...)` conflicts with `renderer.setClearColor`** — use one or the other, not both; `scene.background` takes priority. When you support a light theme, switch `scene.background` based on the active CSS-variable theme so the 3D viewport matches the page

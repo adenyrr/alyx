@@ -1,6 +1,7 @@
 ---
 name: mathjax-latex
 description: Render LaTeX mathematical equations and scientific notation in HTML artifacts using MathJax 3. Use this skill whenever someone needs rendered math equations, formulas, or scientific notation in a web page — inline or display-mode. Trigger on requests like "render this equation", "show a formula", "create a math reference sheet", "display LaTeX in html", or any prompt that includes LaTeX math notation (\frac, \sum, \int, etc.) that must be visually rendered. Do NOT use for data charts (→ chartjs/plotly skill), code highlighting (→ prism-code skill), or Markdown rendering (→ plain HTML).
+agents: [dev]
 ---
 
 # MathJax LaTeX Skill
@@ -120,12 +121,23 @@ Beautifully typeset mathematical equations — fractions, integrals, summations,
     p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
     p, li { font-size: 0.9rem; line-height: 1.8; color: #cbd5e1; }
 
-    /* MathJax dark theme overrides */
-    mjx-container { color: #e2e8f0 !important; }
+    /* MathJax theme — equation colour follows the surrounding text colour */
+    mjx-container { color: inherit !important; }
     mjx-container[display="true"] {
       margin: 16px 0 !important;
       overflow-x: auto;
     }
+
+    /* Light theme (auto via prefers-color-scheme; force with [data-theme="light"] on <html>) */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) body { background: #f8fafc; color: #1e293b; }
+      :root:not([data-theme="dark"]) .card { background: #ffffff; box-shadow: 0 8px 40px rgba(15,23,42,0.08); }
+      :root:not([data-theme="dark"]) h1, :root:not([data-theme="dark"]) h2 { color: #0f172a; }
+      :root:not([data-theme="dark"]) p, :root:not([data-theme="dark"]) li { color: #1e293b; }
+    }
+    [data-theme="light"] body { background: #f8fafc; color: #1e293b; }
+    [data-theme="light"] .card { background: #ffffff; }
+    [data-theme="light"] p, [data-theme="light"] li { color: #1e293b; }
   </style>
   <script>
     MathJax = {
@@ -135,9 +147,13 @@ Beautifully typeset mathematical equations — fractions, integrals, summations,
         processEscapes: true,
         tags: 'ams',  // equation numbering
       },
+      options: {
+        // Built-in accessibility (assistive MathML for screen readers)
+        enableMenu: true,
+      },
     };
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.min.js" async></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.min.js" async crossorigin="anonymous"></script>
 </head>
 <body>
   <div class="card">
@@ -297,7 +313,7 @@ MathJax.typesetPromise([container]);
 
 ## Step 9 — Design & Polish Guidelines
 
-- **Color override** — MathJax renders black text by default; add `mjx-container { color: #e2e8f0 !important; }` for dark theme
+- **Colour override** — MathJax renders black text by default; use `mjx-container { color: inherit !important; }` so equations match the surrounding text in both dark and light themes (instead of hard-coding `#e2e8f0`)
 - **Overflow** — display equations can be wider than the card; add `overflow-x: auto` to `mjx-container[display="true"]`
 - **Config before script** — the `MathJax = { ... }` config object MUST appear before the MathJax `<script>` tag; otherwise defaults are used
 - **`processEscapes: true`** — enables `\$` to render a literal dollar sign when using `$` delimiters
@@ -330,7 +346,7 @@ MathJax.typesetPromise([container]);
     .formula-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .formula-item { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 14px; border: 1px solid rgba(255,255,255,0.06); }
     .formula-item .label { font-size: 0.75rem; color: #94a3b8; margin-bottom: 6px; }
-    mjx-container { color: #e2e8f0 !important; }
+    mjx-container { color: inherit !important; }
     mjx-container[display="true"] { margin: 12px 0 !important; overflow-x: auto; }
     @media (max-width: 600px) { .formula-grid { grid-template-columns: 1fr; } }
   </style>
@@ -435,3 +451,6 @@ MathJax.typesetPromise([container]);
 - **Missing `processEscapes`** — if using `$` delimiters, `processEscapes: true` allows `\$` as a literal dollar sign
 - **Loading multiple output formats** — only load one: `tex-chtml.min.js` OR `tex-svg.min.js`, not both
 - **Equation numbering not showing** — requires `tags: 'ams'` in the tex config; without it, `\begin{equation}` tags don't number
+- **Hard-coded colour overrides** — using `color: #e2e8f0` for equations breaks the moment the surrounding page is light; use `color: inherit` and let the body's `color` (driven by theme) cascade in
+- **Long equations overflow viewport on mobile** — wrap display math in a container with `overflow-x: auto` (already in the shell) and consider adding `tabindex="0"` so it's keyboard-scrollable; for `align*` blocks, line-break with `\\` aggressively
+- **`MathJax.typesetPromise` called before MathJax loads** — gate dynamic typeset calls with `MathJax.startup.promise.then(() => MathJax.typesetPromise([el]))` to avoid `Cannot read properties of undefined`

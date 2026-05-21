@@ -1,6 +1,7 @@
 ---
 name: bulma-css
 description: Build clean, responsive, component-rich interfaces using Bulma v1 CSS framework, delivered as self-contained HTML artifacts. Use this skill whenever someone needs a well-structured UI page with ready-made components and no JavaScript dependency — landing pages, dashboards, forms, admin panels, marketing pages, documentation layouts, or any multi-component page where visual consistency and responsiveness matter. Trigger on requests like "build a page with a navbar and cards", "create a responsive layout", "make a clean form with sections", "design a dashboard with columns", or any request for structured multi-component HTML pages. Bulma is pure CSS — use it when you want a polished result fast without framework overhead. Do NOT use for pixel-perfect custom animations (→ creative-artifacts), data tables (→ tabulator), charts (→ charting), or complex interactive React apps (→ shadcn-ui or creative-artifacts).
+agents: [dev]
 ---
 
 # Bulma CSS Skill — v1.0.4
@@ -67,26 +68,35 @@ Optional: Font Awesome icons (commonly paired with Bulma)
 
 ---
 
-## Step 2 — Dark Mode
+## Step 2 — Dark & Light Themes
 
-Bulma v1 has first-class dark mode support via CSS variables. Three activation methods:
+Bulma v1 has first-class light/dark mode support via CSS variables. Three activation methods:
 
 ```html
 <!-- Method 1: Respect system preference (automatic) -->
 <!-- No class or attribute needed — uses prefers-color-scheme media query -->
 
-<!-- Method 2: Force dark mode on an element and its children -->
+<!-- Method 2: Force dark/light on an element and its children -->
 <html data-theme="dark">    <!-- entire page dark -->
-<div data-theme="dark">     <!-- only this section dark -->
+<html data-theme="light">   <!-- entire page light -->
+<div  data-theme="dark">    <!-- only this section dark -->
 
 <!-- Method 3: Class-based (same result as attribute) -->
 <html class="theme-dark">
-
-<!-- Force light mode explicitly -->
-<html data-theme="light">
+<html class="theme-light">
 ```
 
-For artifacts, always add `data-theme="dark"` on `<html>` to match the default dark aesthetic.
+For artifacts, default to `data-theme="dark"`. To support both, omit the attribute and rely on `prefers-color-scheme`; for a runtime toggle, flip the `data-theme` attribute via a small script (also persist in `useState`-equivalent — never `localStorage` in artifact sandboxes).
+
+**Universal palette reference (mirrors the design system):**
+| Token            | Dark                       | Light                  |
+|------------------|----------------------------|------------------------|
+| bg (page)        | `#0f1117`                  | `#f8fafc`              |
+| card             | `#1a1d27`                  | `#ffffff`              |
+| border           | `rgba(255,255,255,0.08)`   | `rgba(0,0,0,0.08)`     |
+| text             | `#e2e8f0`                  | `#1e293b`              |
+| muted            | `#94a3b8`                  | `#475569`              |
+| accent           | `#6366f1`                  | `#6366f1`              |
 
 ---
 
@@ -739,3 +749,6 @@ mx-auto        my-auto        px-4            py-5
 - **Missing `is-mobile` on horizontal mobile columns** — by default, `.columns` stacks vertically on mobile. Add `is-mobile` to the `columns` div to keep them horizontal on phones
 - **Conflicting custom CSS specificity** — Bulma uses BEM-like classes with low specificity. Custom styles on the same selectors (e.g., `.button`) can be overridden by Bulma's `!important` on helper classes; use the CSS variable system (`--bulma-*`) for theme overrides instead
 - **Using `is-fullwidth` on inline elements** — `is-fullwidth` uses `width: 100%` which works on block elements; apply it to the wrapper, not to inline elements like `<a>` or `<span>`
+- **Hardcoding `data-theme="dark"` and ignoring system preference** — omit the attribute (or wire it to `prefers-color-scheme`) when the request doesn't explicitly demand a forced theme; users with light-mode OS preference often need light artifacts
+- **Suppressing `:focus` outlines** — Bulma's defaults are accessible; do not add `*:focus { outline: none }` in custom CSS without replacing it with `:focus-visible { outline: 2px solid var(--bulma-primary); outline-offset: 2px }`
+- **Building `innerHTML` from user input** — when scripting interactive widgets (modal contents, dynamic tags), set `textContent` rather than `innerHTML`, or sanitize via DOMPurify; otherwise injected `<script>` or `onerror=` attributes execute in the artifact context

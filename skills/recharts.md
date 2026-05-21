@@ -1,6 +1,7 @@
 ---
 name: recharts
 description: Create responsive React-based data charts using Recharts, delivered as self-contained HTML artifacts. Use this skill whenever someone needs React-rendered charts — line, bar, area, pie, radar, scatter, composed, funnel, or treemap — especially when data is dynamic or the artifact already uses React/shadcn-ui. Trigger on requests like "make a React chart", "create a dashboard with charts", "build a line chart with React", "show data in a bar chart", or any prompt needing charts within a React-based artifact. Do NOT use for non-React HTML charts (→ chartjs or plotly skill) or for complex scientific/3D plots (→ plotly skill).
+agents: [dev]
 ---
 
 # Recharts Skill
@@ -52,16 +53,16 @@ Clean, responsive SVG charts with animated entry, hover tooltips, and optional i
 ## Step 1 — CDN Setup
 
 ```html
-<!-- React -->
+<!-- React 18 — production UMD (development builds are larger and noisier) -->
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-<!-- Babel for JSX -->
+<!-- Babel standalone — required to transpile JSX in the browser -->
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
-<!-- Recharts -->
+<!-- Recharts v2 UMD — exposes the `Recharts` global -->
 <script src="https://cdn.jsdelivr.net/npm/recharts@2/umd/Recharts.min.js"></script>
 ```
 
-> The UMD build exposes `Recharts` globally. Destructure: `const { LineChart, Line, XAxis, YAxis, ... } = Recharts;`
+> The UMD build exposes `Recharts` globally. Destructure inside your component module: `const { LineChart, Line, XAxis, YAxis, ResponsiveContainer, ... } = Recharts;`. Recharts v2 requires React 16.8+ and works with React 18's `createRoot`. (Recharts v3 is available but breaks several v2 APIs; pin to `recharts@2` for this skill.)
 
 ---
 
@@ -75,28 +76,53 @@ Clean, responsive SVG charts with animated entry, hover tooltips, and optional i
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Chart Dashboard</title>
   <style>
+    :root {
+      --bg:     #0f1117;
+      --card:   #1a1d27;
+      --border: rgba(255,255,255,0.08);
+      --text:   #e2e8f0;
+      --title:  #f1f5f9;
+      --muted:  #64748b;
+      --axis:   #94a3b8;
+      --grid:   rgba(255,255,255,0.06);
+      --line:   #2a2d3a;
+      --tip-bg: #1a1d27;
+      --tip-bd: rgba(255,255,255,0.1);
+      --accent: #6366f1;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff;
+        --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --title: #0f172a; --muted: #475569;
+        --axis: #475569; --grid: rgba(0,0,0,0.06); --line: #cbd5e1;
+        --tip-bg: #ffffff; --tip-bd: rgba(0,0,0,0.1);
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff;
+      --border: rgba(0,0,0,0.08);
+      --text: #1e293b; --title: #0f172a; --muted: #475569;
+      --axis: #475569; --grid: rgba(0,0,0,0.06); --line: #cbd5e1;
+      --tip-bg: #ffffff; --tip-bd: rgba(0,0,0,0.1);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-height: 100vh;
-      padding: 24px;
+      background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; align-items: center;
+      min-height: 100vh; padding: 24px;
     }
     .card {
-      width: 100%;
-      max-width: 800px;
-      background: #1a1d27;
-      border-radius: 16px;
-      padding: 28px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      width: 100%; max-width: 800px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.15);
       margin-bottom: 20px;
     }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
+    h1 { font-size: 1.15rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--muted); margin-bottom: 20px; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -109,12 +135,27 @@ Clean, responsive SVG charts with animated entry, hover tooltips, and optional i
   <script type="text/babel">
     const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
 
+    // Theme-aware token helpers — read once per render
+    function useTokens() {
+      const cs = getComputedStyle(document.documentElement);
+      return {
+        axis: cs.getPropertyValue('--axis').trim() || '#94a3b8',
+        grid: cs.getPropertyValue('--grid').trim() || 'rgba(255,255,255,0.06)',
+        line: cs.getPropertyValue('--line').trim() || '#2a2d3a',
+        tipBg: cs.getPropertyValue('--tip-bg').trim() || '#1a1d27',
+        tipBd: cs.getPropertyValue('--tip-bd').trim() || 'rgba(255,255,255,0.1)',
+      };
+    }
+
     function App() {
+      const t = useTokens();
+      // Respect reduced-motion: turn off chart entry animation
+      const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
       return (
-        <div className="card">
+        <div className="card" role="region" aria-label="Chart card">
           <h1>Title</h1>
           <p className="sub">Description</p>
-          {/* Chart here */}
+          {/* Chart here — pass `isAnimationActive={!reduceMotion}` to series */}
         </div>
       );
     }
@@ -346,14 +387,34 @@ const scatterData = [
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sales Dashboard</title>
   <style>
+    :root {
+      --bg: #0f1117; --card: #1a1d27;
+      --title: #f1f5f9; --text: #e2e8f0; --muted: #64748b;
+      --axis: #94a3b8; --grid: rgba(255,255,255,0.06);
+      --line: #2a2d3a; --tip-bg: #1a1d27; --tip-bd: rgba(255,255,255,0.1);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff;
+        --title: #0f172a; --text: #1e293b; --muted: #475569;
+        --axis: #475569; --grid: rgba(0,0,0,0.06);
+        --line: #cbd5e1; --tip-bg: #ffffff; --tip-bd: rgba(0,0,0,0.1);
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff;
+      --title: #0f172a; --text: #1e293b; --muted: #475569;
+      --axis: #475569; --grid: rgba(0,0,0,0.06);
+      --line: #cbd5e1; --tip-bg: #ffffff; --tip-bd: rgba(0,0,0,0.1);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; display: flex; justify-content: center; min-height: 100vh; padding: 24px; }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); display: flex; justify-content: center; min-height: 100vh; padding: 24px; }
     #root { width: 100%; max-width: 1000px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 20px; }
-    .card { background: #1a1d27; border-radius: 16px; padding: 24px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 16px; }
-    .page-title { font-size: 1.4rem; font-weight: 700; color: #f1f5f9; margin-bottom: 20px; text-align: center; }
+    .card { background: var(--card); border-radius: 16px; padding: 24px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+    h1 { font-size: 1.15rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    p.sub { font-size: 0.82rem; color: var(--muted); margin-bottom: 16px; }
+    .page-title { font-size: 1.4rem; font-weight: 700; color: var(--title); margin-bottom: 20px; text-align: center; }
   </style>
 </head>
 <body>
@@ -371,6 +432,28 @@ const scatterData = [
 
     const COLORS = ['#6366f1','#8b5cf6','#ec4899','#22c55e','#06b6d4','#f97316'];
 
+    // Theme-aware token helper — re-reads CSS variables on each render,
+    // and re-renders whenever the OS theme preference flips.
+    function useTokens() {
+      const [, force] = React.useReducer(x => x + 1, 0);
+      React.useEffect(() => {
+        const mq = matchMedia('(prefers-color-scheme: light)');
+        const onChange = () => force();
+        mq.addEventListener('change', onChange);
+        return () => mq.removeEventListener('change', onChange);
+      }, []);
+      const cs = getComputedStyle(document.documentElement);
+      return {
+        axis:  cs.getPropertyValue('--axis').trim()   || '#94a3b8',
+        grid:  cs.getPropertyValue('--grid').trim()   || 'rgba(255,255,255,0.06)',
+        line:  cs.getPropertyValue('--line').trim()   || '#2a2d3a',
+        tipBg: cs.getPropertyValue('--tip-bg').trim() || '#1a1d27',
+        tipBd: cs.getPropertyValue('--tip-bd').trim() || 'rgba(255,255,255,0.1)',
+        text:  cs.getPropertyValue('--text').trim()   || '#e2e8f0',
+        muted: cs.getPropertyValue('--muted').trim()  || '#64748b',
+      };
+    }
+
     const monthly = [
       { month: 'Jan', revenue: 4200, expenses: 2400 },
       { month: 'Feb', revenue: 3800, expenses: 2200 },
@@ -387,10 +470,12 @@ const scatterData = [
       { name: 'Referral', value: 120 },
     ];
 
-    const axisProps = { tick: { fill: '#94a3b8', fontSize: 12 }, axisLine: { stroke: '#2a2d3a' }, tickLine: false };
-    const tipStyle = { background: '#1a1d27', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 };
-
     function App() {
+      const t = useTokens();
+      const axisProps = { tick: { fill: t.axis, fontSize: 12 }, axisLine: { stroke: t.line }, tickLine: false };
+      const tipStyle  = { background: t.tipBg, border: `1px solid ${t.tipBd}`, borderRadius: 8, color: t.text };
+      const legendStyle = { color: t.axis, fontSize: 12 };
+
       return (
         <div>
           <div className="page-title">Sales Dashboard</div>
@@ -408,7 +493,7 @@ const scatterData = [
                       <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
                   <XAxis dataKey="month" {...axisProps} />
                   <YAxis {...axisProps} />
                   <Tooltip contentStyle={tipStyle} />
@@ -423,11 +508,11 @@ const scatterData = [
               <p className="sub">Side-by-side monthly comparison</p>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={monthly}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
                   <XAxis dataKey="month" {...axisProps} />
                   <YAxis {...axisProps} />
                   <Tooltip contentStyle={tipStyle} />
-                  <Legend wrapperStyle={{ color: '#94a3b8', fontSize: 12 }} />
+                  <Legend wrapperStyle={legendStyle} />
                   <Bar dataKey="revenue" fill="#6366f1" radius={[4,4,0,0]} />
                   <Bar dataKey="expenses" fill="#ec4899" radius={[4,4,0,0]} />
                 </BarChart>
@@ -441,7 +526,7 @@ const scatterData = [
               <ResponsiveContainer width="100%" height={250}>
                 <PieChart>
                   <Pie data={channels} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={3} dataKey="value"
-                    label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`} labelLine={{ stroke: '#64748b' }}>
+                    label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`} labelLine={{ stroke: t.muted }}>
                     {channels.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
                   <Tooltip contentStyle={tipStyle} />
@@ -455,11 +540,11 @@ const scatterData = [
               <p className="sub">Revenue and expenses over time</p>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={monthly}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
                   <XAxis dataKey="month" {...axisProps} />
                   <YAxis {...axisProps} />
                   <Tooltip contentStyle={tipStyle} />
-                  <Legend wrapperStyle={{ color: '#94a3b8', fontSize: 12 }} />
+                  <Legend wrapperStyle={legendStyle} />
                   <Line type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2} dot={{ r: 4, fill: '#6366f1' }} />
                   <Line type="monotone" dataKey="expenses" stroke="#ec4899" strokeWidth={2} dot={{ r: 4, fill: '#ec4899' }} />
                 </LineChart>
@@ -487,6 +572,11 @@ const scatterData = [
 - **No `type="number"` on scatter axes** — XAxis/YAxis default to `category` type; scatter plots need `type="number"`
 - **Using CSS for SVG styling** — Recharts renders SVG; use component props (`fill`, `stroke`, `strokeWidth`) not CSS classes
 - **Hard-coded width** — never set `width={500}` on a chart; always use `<ResponsiveContainer>` for responsive behavior
-- **`<script type="text/babel">`** — CDN Recharts with JSX requires Babel standalone; forgetting `type="text/babel"` causes syntax errors
-- **Tooltip `contentStyle` not dark** — default tooltip is white/light; always override with dark theme colors
+- **Pinning to `recharts@latest`** — v3 changed several APIs (legend rendering, animation defaults); pin to `recharts@2` for this skill
+- **Mixing the UMD `Recharts` global with ES imports** — the UMD build is React-aware but does not register with module bundlers. In artifact HTML, always destructure from the global `Recharts` after the `<script>` tag loads
+- **`<script type="text/babel">` missing** — CDN Recharts with JSX requires Babel standalone; forgetting `type="text/babel"` causes syntax errors
+- **Tooltip `contentStyle` not matching theme** — default tooltip is light; derive `contentStyle` from CSS variables so it stays legible on both dark and light
+- **Hard-coded axis stroke colours that vanish on light theme** — read `--axis`, `--grid` from CSS variables (see Step 2 `useTokens()`)
+- **Animation always on** — respect `prefers-reduced-motion` by passing `isAnimationActive={false}` when the user has requested reduced motion
 - **PieChart without explicit cx/cy** — center defaults may not work well in all containers; always set `cx="50%" cy="50%"`
+- **Suppressing focus outlines on legend/tooltip** — keyboard users tab through legend items; keep `:focus-visible` outlines visible

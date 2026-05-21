@@ -103,7 +103,7 @@
     },
 
     "context7": {
-      "_comment": "Client Context7 via npx — nécessite clé API dans l'environnement.",
+      "_comment": "Client Context7 via npx — nécessite clé API dans l'environnement.",vscode-webview://05eqmplujki9ekpr1nnh39cn9jnrutmo1oadho8rm2bm0eipfe5q/index.html?id=8759c1e1-b381-4c23-abac-cf9ed869351c&parentId=1&origin=8d7cc593-3d7e-4184-b045-7e68f852d665&swVersion=5&extensionId=Anthropic.claude-code&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=webviewView&session=4b6bf606-6f8c-45c5-83a5-715451c2f43f#
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp", "--api-key", "${CONTEXT7_API_KEY}"]
     },

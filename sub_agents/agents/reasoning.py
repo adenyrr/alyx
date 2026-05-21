@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
+from tools.skills_loader import find_relevant as find_relevant_skills
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -84,6 +85,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     _prompt_tokens = 0
     _completion_tokens = 0
     context_parts: list[str] = []
+
+    # 0. Skills méthodologiques (SWOT, RACI, Eisenhower, pre-mortem…)
+    skill_hits = find_relevant_skills(user_text, agent="reasoning")
+    if skill_hits:
+        skill_block = "\n\n".join(f"### Skill: {n}\n{c[:5000]}" for _, n, c in skill_hits)
+        context_parts.append(
+            "## Analytical framework(s) to apply\n" + skill_block
+        )
 
     # 1. Décomposer la question en étapes d'analyse
     await _emit("🧩 Décomposition analytique…")

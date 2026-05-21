@@ -1,6 +1,7 @@
 ---
 name: mermaid-diagrams
 description: Create clear, well-structured diagrams using Mermaid syntax, rendered as self-contained HTML artifacts. Use this skill for flowcharts, process flows, decision trees, sequence diagrams (system interactions, API calls, auth flows), class diagrams (OOP, data models), entity-relationship diagrams, state machines, Gantt charts, Git branch graphs, architecture diagrams, C4 models, mindmaps, timelines, quadrant charts, pie charts, and XY charts. Trigger whenever someone asks to document a process, visualize a system, map relationships between entities, diagram an architecture, model a workflow, or describe interactions between components — even without explicit mention of Mermaid. Do NOT use for interactive network graphs (→ vis-network), data chart analytics (→ charting), or project roadmaps with drag-and-drop (→ vis-timeline).
+agents: [dev]
 ---
 
 # Mermaid Diagrams Skill
@@ -55,16 +56,26 @@ Clean SVG diagrams rendered from text: crisp shapes, readable labels, dark-theme
 Mermaid v11 ships as an ES module. The simplest pattern for single-file HTML artifacts uses the UMD build:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" crossorigin="anonymous"></script>
 <script>
+  // Pick theme based on user preference (override with [data-theme] on <html>)
+  const prefersLight =
+    document.documentElement.dataset.theme === 'light' ||
+    (!document.documentElement.dataset.theme &&
+     window.matchMedia('(prefers-color-scheme: light)').matches);
+
   mermaid.initialize({
     startOnLoad: true,
-    theme: 'dark',           // 'default' | 'dark' | 'neutral' | 'forest' | 'base'
-    securityLevel: 'loose',  // allows HTML in labels
+    theme: prefersLight ? 'default' : 'dark',  // 'default'|'dark'|'neutral'|'forest'|'base'
+    securityLevel: 'strict',                   // 'strict' blocks raw HTML in labels (safer default)
     fontFamily: "'Segoe UI', sans-serif",
+    // Honour reduced-motion: skip the auto-render fade-in
+    flowchart: { useMaxWidth: true },
   });
 </script>
 ```
+
+> **`securityLevel: 'loose'`** allows raw HTML inside labels (e.g. `<br/>`) but enables XSS if labels come from user input. Prefer `'strict'` and use Mermaid's own escaped formatting; only relax to `'loose'` when the diagram text is fully trusted.
 
 **Or with ESM** (needed when calling `mermaid.render()` programmatically):
 ```html
@@ -74,7 +85,7 @@ Mermaid v11 ships as an ES module. The simplest pattern for single-file HTML art
 </script>
 ```
 
-Use the **UMD build + `startOnLoad: true`** for the vast majority of artifacts — it finds and renders all `.mermaid` divs automatically.
+Use the **UMD build + `startOnLoad: true`** for the vast majority of artifacts — it finds and renders all `.mermaid` divs automatically. Mermaid v11 renamed many theme variables vs v9/v10; always reference the v11 docs and avoid copy-pasting older `themeVariables` blocks without testing.
 
 ---
 
@@ -163,6 +174,8 @@ flowchart LR
 ```
 
 ### Custom colors via `themeVariables` (use with `theme: 'base'`)
+
+**Dark token set:**
 ```
 %%{init: {
   'theme': 'base',
@@ -179,6 +192,28 @@ flowchart LR
     'clusterBkg':         '#1e293b',
     'titleColor':         '#f1f5f9',
     'edgeLabelBackground':'#1a1d27',
+    'fontFamily':         'Segoe UI, sans-serif'
+  }
+}}%%
+```
+
+**Light token set:**
+```
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor':       '#6366f1',
+    'primaryTextColor':   '#0f172a',
+    'primaryBorderColor': '#6366f1',
+    'lineColor':          '#475569',
+    'secondaryColor':     '#f1f5f9',
+    'tertiaryColor':      '#e2e8f0',
+    'background':         '#f8fafc',
+    'mainBkg':            '#ffffff',
+    'nodeBorder':         '#6366f1',
+    'clusterBkg':         '#f1f5f9',
+    'titleColor':         '#0f172a',
+    'edgeLabelBackground':'#ffffff',
     'fontFamily':         'Segoe UI, sans-serif'
   }
 }}%%
@@ -632,3 +667,7 @@ sequenceDiagram
 - **Deeply nested subgraphs** reduce readability fast — prefer flat diagrams with clear edge labels over 3+ nesting levels
 - **Very long labels** push nodes off-screen — keep labels under ~30 characters; line breaks via `<br/>` require `securityLevel: 'loose'`
 - **`theme` set in `initialize()` can silently lose to browser caching** — for reliable theming in artifacts, always use the `%%{init}%%` directive directly in the diagram definition
+- **Using `securityLevel: 'loose'` with untrusted diagram text** — `'loose'` allows raw HTML in labels, which becomes an XSS sink if the diagram is built from user input. Default to `'strict'`; only relax for hand-authored diagrams
+- **No `aria-label` on the rendered SVG container** — Mermaid emits SVG without a textual summary; add `<div class="mermaid" role="img" aria-label="Order processing flowchart">` so screen-reader users learn what the diagram depicts
+- **Ignoring `prefers-reduced-motion`** — Mermaid's auto-rendered fade-in motion can affect motion-sensitive users; while Mermaid itself doesn't expose a flag, you can wrap the SVG with `@media (prefers-reduced-motion: reduce) { .mermaid svg, .mermaid svg * { animation: none !important; transition: none !important; } }`
+- **Copy-pasting v9/v10 `themeVariables`** — Mermaid v11 renamed/removed several variables; if a colour silently ignores your override, check the v11 theme variable reference rather than assuming the key is correct

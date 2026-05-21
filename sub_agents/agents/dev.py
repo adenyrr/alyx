@@ -15,8 +15,6 @@ Outils (dans l'ordre d'utilisation) :
 from __future__ import annotations
 
 import os
-import re
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from langchain_openai import ChatOpenAI
@@ -25,6 +23,7 @@ from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 from tools.context7_client import get_library_docs, resolve_library_id
+from tools.skills_loader import find_relevant as find_relevant_skills
 from tools.terminal_client import execute
 
 if TYPE_CHECKING:
@@ -34,34 +33,21 @@ _MODEL = "openrouter/kimi-k2.5"
 _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
 _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 
-# ------- Skills -------
-_skills_cache: dict[str, str] = {}
-_skills_meta: dict[str, str] = {}
-_SKILLS_DIR = Path("/app/pipelines/skills")
-
-_STOPWORDS = {
-    "a", "an", "the", "is", "in", "to", "how", "do", "can", "me", "i", "for", "of",
-    "with", "this", "my", "any", "and", "or", "it", "that", "on", "what", "use",
-    "get", "have", "be", "are", "was", "will", "by", "at", "as", "from", "make",
-    "build", "show", "give", "let", "want", "need", "please", "help", "write", "create",
-    "de", "du", "le", "la", "les", "un", "une", "des", "je", "tu", "il", "nous",
-    "vous", "ils", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses",
-    "que", "qui", "quoi", "quel", "quelle", "faire", "fait", "fais", "avec",
-    "sans", "mais", "ou", "et", "si", "car", "est", "sur", "par", "pour", "dans",
-    "ce", "cet", "ces", "moi", "toi", "lui", "suis", "veux", "peux", "dois",
-    "crée", "crée-moi", "génère", "fais-moi", "affiche", "montre", "présente",
-}
-
 _KNOWN_LIBS = [
-    "leaflet", "react", "vue", "angular", "svelte", "tailwind", "bulma",
-    "chartjs", "chart.js", "d3", "plotly", "three.js", "threejs", "p5js", "p5",
+    # Charts / data viz
+    "leaflet", "maplibre", "chartjs", "chart.js", "d3", "plotly", "echarts",
+    "recharts", "tabulator", "vis-network", "vis-timeline", "mermaid", "jointjs",
+    "konva", "pixijs", "pixi.js", "excalidraw", "markmap", "wavesurfer",
+    # Animation / 3D
+    "three.js", "threejs", "p5js", "p5", "gsap", "anime.js", "animejs", "tone.js",
+    # UI / frameworks
+    "react", "vue", "angular", "svelte", "tailwind", "bulma", "shadcn",
+    "htmx", "lit", "monaco", "monaco-editor", "tiptap", "prosemirror",
+    "reveal.js", "reveal", "fullcalendar", "mathjax", "prism",
+    # Backend / data
     "langchain", "langgraph", "fastapi", "django", "flask", "sqlalchemy",
     "pandas", "numpy", "scipy", "sklearn", "tensorflow", "pytorch",
     "docker", "kubernetes", "terraform", "ansible",
-    "shadcn", "gsap", "anime.js", "animejs", "konva", "jointjs",
-    "mermaid", "vis-network", "vis-timeline", "tabulator",
-    "recharts", "reveal.js", "mathjax", "prism", "tone.js",
-    "fullcalendar", "vis",
 ]
 
 _SYSTEM = """\
@@ -128,45 +114,6 @@ Always reply in English.
 """
 
 
-def _load_skills() -> None:
-    if _skills_cache or not _SKILLS_DIR.exists():
-        return
-    for skill_file in _SKILLS_DIR.glob("*.md"):
-        try:
-            content = skill_file.read_text(encoding="utf-8")
-            name_match = re.search(r"^name:\s*(.+)$", content, re.MULTILINE)
-            key = name_match.group(1).strip() if name_match else skill_file.stem
-            desc_match = re.search(r"^description:\s*(.+)$", content, re.MULTILINE)
-            _skills_cache[key] = content
-            _skills_meta[key] = desc_match.group(1).strip() if desc_match else ""
-        except Exception:
-            pass
-
-
-def _find_relevant_skills(query: str) -> list[tuple[int, str, str]]:
-    """Retourne les skills scorés (score, name, content) triés par pertinence."""
-    _load_skills()
-    query_lower = query.lower()
-    query_words = {w for w in re.split(r"\W+", query_lower) if len(w) > 3 and w not in _STOPWORDS}
-    scored: list[tuple[int, str, str]] = []
-    for name, content in _skills_cache.items():
-        score = 0
-        name_lower = name.lower()
-        if name_lower in query_lower:
-            score += 10
-        else:
-            for part in re.split(r"[-_.]", name_lower):
-                if len(part) > 3 and part in query_lower:
-                    score += 5
-        desc = _skills_meta.get(name, "").lower()
-        if desc and query_words:
-            score += min(sum(1 for w in query_words if w in desc), 5)
-        if score > 0:
-            scored.append((score, name, content))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[:2]
-
-
 def _detect_library(query: str) -> str | None:
     q = query.lower()
     return next(
@@ -205,7 +152,6 @@ def _last_user_message(messages: list) -> str:
 
 
 async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
-    _load_skills()
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
 
@@ -240,7 +186,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
 
     # 1. Skills locaux pertinents
     await _emit("📚 Recherche dans les skills…")
-    skill_hits = _find_relevant_skills(user_text)
+    skill_hits = find_relevant_skills(user_text, agent="dev")
     if skill_hits:
         skill_names = ", ".join(n for _, n, _ in skill_hits)
         await _emit(f"📚 Skills : {skill_names}")

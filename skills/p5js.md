@@ -1,6 +1,7 @@
 ---
 name: p5js-creative-coding
 description: Create expressive, generative, and interactive 2D/3D sketches using p5.js v2, delivered as self-contained HTML artifacts. Use this skill whenever someone needs creative coding, generative art, algorithmic drawing, interactive animations, simulations, educational math/physics visualisations, particle systems, Perlin noise landscapes, fractal patterns, or any sketch where the pleasure is in the process of drawing rather than in a static result. Trigger on requests like "generate abstract art", "make a particle simulation", "draw a fractal", "animate this mathematical concept", "create a generative pattern", "build an interactive drawing tool", or any prompt that combines creativity, code, and animation. Do NOT use for data charts (→ charting skill), 3D scenes with complex lighting and models (→ threejs-3d skill), or static SVG diagrams (→ mermaid-diagrams skill).
+agents: [dev]
 ---
 
 # p5.js Creative Coding Skill — v2
@@ -108,11 +109,13 @@ Use **v2 for new projects**, v1 if following existing tutorials or examples that
 </script>
 ```
 
-**Use global mode for standalone artifacts (simpler). Use instance mode when embedding multiple sketches in one page, or when integrating with other frameworks.**
+**Recommendation:** prefer **instance mode** for embedded contexts (artifacts, iframes, multi-sketch pages) — it avoids polluting the global namespace and prevents collisions with p5's many global names (`width`, `random`, `text`, `image`, etc.). Use global mode only for the smallest standalone demos.
 
 ---
 
 ## Step 3 — HTML Artifact Shell
+
+The shell supports both a dark default and an opt-in light theme via `[data-theme="light"]` on `<html>` or system `prefers-color-scheme: light`.
 
 ```html
 <!DOCTYPE html>
@@ -122,9 +125,40 @@ Use **v2 for new projects**, v1 if following existing tutorials or examples that
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sketch</title>
   <style>
+    :root {
+      --bg:      #0f1117;
+      --card:    #1a1d27;
+      --text:    #e2e8f0;
+      --muted:   #475569;
+      --shadow:  0 8px 40px rgba(0,0,0,0.6);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:    #f8fafc;
+        --card:  #ffffff;
+        --text:  #1e293b;
+        --muted: #475569;
+        --shadow: 0 8px 40px rgba(0,0,0,0.1);
+      }
+    }
+    [data-theme="light"] {
+      --bg:    #f8fafc;
+      --card:  #ffffff;
+      --text:  #1e293b;
+      --muted: #475569;
+      --shadow: 0 8px 40px rgba(0,0,0,0.1);
+    }
+    [data-theme="dark"] {
+      --bg:    #0f1117;
+      --card:  #1a1d27;
+      --text:  #e2e8f0;
+      --muted: #94a3b8;
+      --shadow: 0 8px 40px rgba(0,0,0,0.6);
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #0f1117;
+      background: var(--bg);
+      color: var(--text);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -137,12 +171,16 @@ Use **v2 for new projects**, v1 if following existing tutorials or examples that
     canvas {
       display: block;
       border-radius: 12px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+      box-shadow: var(--shadow);
     }
-    /* Optional caption below canvas */
+    /* Honour reduced-motion preference — pause heavy animation by default */
+    @media (prefers-reduced-motion: reduce) {
+      canvas { /* JS reads matchMedia and calls noLoop() — see script */ }
+    }
+    /* Caption below canvas */
     #caption {
       margin-top: 14px;
-      color: #475569;
+      color: var(--muted);
       font-size: 12px;
       letter-spacing: 0.04em;
     }
@@ -153,22 +191,36 @@ Use **v2 for new projects**, v1 if following existing tutorials or examples that
 
   <script src="https://cdn.jsdelivr.net/npm/p5@2.2.2/lib/p5.min.js"></script>
   <script>
+    // Read theme-aware background colour
+    const isLight = () =>
+      document.documentElement.dataset.theme === 'light' ||
+      (!document.documentElement.dataset.theme &&
+       matchMedia('(prefers-color-scheme: light)').matches);
+
     function setup() {
       const cnv = createCanvas(800, 600);
-      cnv.parent(document.body);  // explicit parent (cleaner than default)
-      colorMode(HSB, 360, 100, 100, 100);  // or RGB (default)
+      cnv.parent(document.body);
+      cnv.elt.setAttribute('role', 'img');
+      cnv.elt.setAttribute('aria-label', 'Generative p5.js sketch');
+      colorMode(HSB, 360, 100, 100, 100);
       frameRate(60);
+      // Respect reduced motion — single frame, no loop
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        noLoop();
+      }
+      // Screen-reader description
+      describe('Animated generative p5.js sketch reacting to mouse input.');
     }
 
     function draw() {
-      background(220, 15, 9, 20);  // dark with low alpha = trail effect
+      // Theme-aware background with trail alpha
+      const [h, s, b] = isLight() ? [220, 5, 96] : [220, 15, 9];
+      background(h, s, b, 20);
       // drawing commands here
     }
 
-    // Resize canvas to window (fullscreen sketches)
-    // function windowResized() {
-    //   resizeCanvas(windowWidth, windowHeight);
-    // }
+    // Fullscreen resize
+    // function windowResized() { resizeCanvas(windowWidth, windowHeight); }
   </script>
 </body>
 </html>
@@ -678,3 +730,8 @@ updatePixels();
 - **`loadPixels()` / `updatePixels()` on every frame unnecessarily** — pixel manipulation is slow; call it only when needed, not every frame unless you're doing per-pixel animation
 - **`mouseX` / `mouseY` are 0 before the mouse enters the canvas** — don't use them for initial placement without a conditional; use `width/2, height/2` as defaults
 - **Global mode variable naming conflicts** — p5.js exposes many global names (`width`, `height`, `mouseX`, `mouseY`, `color`, `image`, `text`, `key`, `random`, `min`, `max`, `abs`…); avoid using these as your own variable names in global mode, or use instance mode instead
+- **Ignoring `prefers-reduced-motion`** — animation-heavy sketches can trigger motion sickness; read `matchMedia('(prefers-reduced-motion: reduce)').matches` in `setup()` and call `noLoop()` (or reduce `frameRate`) when true
+- **Hard-coded dark colours that break in light theme** — derive `background()` from a theme check so the sketch is legible on both `[data-theme="light"]` and dark
+- **No `aria-label` / `describe()` on the canvas** — assistive tech sees only "canvas"; always set an `aria-label` on `cnv.elt` and call `describe('…')` for screen-reader context
+- **Suppressing focus-visible outlines** — never apply `canvas:focus { outline: none }`; keyboard users need the focus ring when the canvas is part of an interaction
+- **Using `innerHTML` to inject sketch data** — if you build HUDs from user input, prefer `textContent` over `innerHTML` to avoid XSS

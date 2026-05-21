@@ -29,6 +29,7 @@ from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 from tools.playwright_client import fetch_url as playwright_fetch
+from tools.skills_loader import find_relevant as find_relevant_skills
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -128,6 +129,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     await _emit(f"🔍 Mots-clés : {keywords}")
 
     context_parts: list[str] = []
+
+    # 1bis. Skills méthodologiques (PRISMA, GRADE, revues systématiques…)
+    skill_hits = find_relevant_skills(user_text, agent="doc")
+    if skill_hits:
+        skill_block = "\n\n".join(f"### Skill: {n}\n{c[:5000]}" for _, n, c in skill_hits)
+        context_parts.append(
+            "## Methodological skills (apply these conventions to your output)\n" + skill_block
+        )
 
     # 2. Plan de recherche via sequential-thinking
     await _emit("🧩 Plan de recherche…")

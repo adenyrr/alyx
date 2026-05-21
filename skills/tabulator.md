@@ -1,6 +1,7 @@
 ---
 name: tabulator
 description: Create beautiful, interactive data tables and grids using Tabulator.js v6, delivered as self-contained HTML artifacts. Use this skill whenever someone needs to display, sort, filter, search, paginate, group, or edit tabular data in the browser — even without explicit mention of Tabulator. Trigger on requests like "display this data in a table", "make a sortable list", "create a data grid", "build an editable table", "show this dataset with filters", "make a spreadsheet-like view", or any request to present rows and columns of data with interactivity. Do NOT use for static HTML tables (plain CSS suffices), data charts or graphs (→ charting skill), or network/relational visualizations (→ vis-network skill).
+agents: [dev]
 ---
 
 # Tabulator Skill — Interactive Data Tables
@@ -178,27 +179,50 @@ The CSS overrides in the shell above cover the essentials. Key selectors to know
 
 Built-in themes (apply by swapping the CSS file):
 ```html
-<!-- Default -->
-<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator.min.css" rel="stylesheet">
-<!-- Midnight (dark, pre-built) -->
-<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_midnight.min.css" rel="stylesheet">
-<!-- Modern -->
-<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_modern.min.css" rel="stylesheet">
-<!-- Bootstrap 5 -->
-<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
+<!-- Light pair -->
+<link id="tab-theme-light" rel="stylesheet"
+      href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_simple.min.css" disabled>
+<!-- Dark pair (default) -->
+<link id="tab-theme-dark"  rel="stylesheet"
+      href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_midnight.min.css">
+
+<!-- Other built-ins (each replaces both above) -->
+<!-- tabulator.min.css        (default neutral) -->
+<!-- tabulator_modern.min.css (modern light)   -->
+<!-- tabulator_bootstrap5.min.css              -->
 ```
 
-> Use `tabulator_midnight.min.css` as a starting point for dark themes, then override with your own CSS on top.
+**Theme pair pattern.** Use `tabulator_midnight.min.css` for dark and `tabulator_simple.min.css` for light, then toggle one off via the `disabled` attribute:
+
+```javascript
+function applyTabulatorTheme() {
+  const isLight = document.documentElement.dataset.theme === 'light' ||
+    (!document.documentElement.dataset.theme &&
+     matchMedia('(prefers-color-scheme: light)').matches);
+  document.getElementById('tab-theme-dark').disabled  =  isLight;
+  document.getElementById('tab-theme-light').disabled = !isLight;
+}
+applyTabulatorTheme();
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyTabulatorTheme);
+```
+
+Layered custom CSS sits *after* both `<link>` tags so it wins specificity for both themes — derive colours from CSS variables (see Step 2).
 
 ---
 
 ## Step 4 — Minimal Setup
 
 ```javascript
+// Constants — name these instead of sprinkling magic numbers across the config
+const TABLE_HEIGHT      = '400px';   // fixed → enables virtual DOM scrolling
+const PAGE_SIZE_DEFAULT = 15;
+const VIRTUAL_ROW_THRESHOLD = 500;   // > this row count → height + virtual DOM are mandatory
+
 const table = new Tabulator('#data-table', {
-  height:      '400px',      // fixed height → enables virtual scrolling (essential for large datasets)
-  layout:      'fitColumns', // 'fitColumns' | 'fitData' | 'fitDataFill' | 'fitDataStretch'
-  data:        tableData,    // array of row objects
+  height:      TABLE_HEIGHT,      // **required for any table > ~500 rows** — see VIRTUAL_ROW_THRESHOLD
+  layout:      'fitColumns',      // 'fitColumns' | 'fitData' | 'fitDataFill' | 'fitDataStretch'
+  renderVertical: 'virtual',      // 'virtual' (default) | 'basic' — keep 'virtual' for large datasets
+  data:        tableData,         // array of row objects
   columns: [
     { title: 'Name',   field: 'name',   sorter: 'string', width: 180 },
     { title: 'Age',    field: 'age',    sorter: 'number', hozAlign: 'right' },
@@ -206,6 +230,8 @@ const table = new Tabulator('#data-table', {
   ],
 });
 ```
+
+> **Virtual DOM is the default in v6**, but it only activates when the table has an explicit `height`. Tables without a height fall back to rendering every row — perceptible above ~500 rows, broken above ~10 000.
 
 ---
 
@@ -527,15 +553,16 @@ table.on('pageLoaded', (pageNum) => {});
 
 ## Step 15 — Design & Polish Guidelines
 
-- **Always set `height`** — enables virtual DOM scrolling for performance; without it, large datasets render all rows and lag
+- **Always set `height` for tables > 500 rows** — enables virtual DOM scrolling; without it, large datasets render all rows and lag
 - **Use `layout: 'fitColumns'`** — columns fill the container width; switch to `fitData` only for narrow tables with few columns
-- **Dark theme CSS overrides** — always include the full set from the Shell (Step 2); missing overrides leave white backgrounds on headers, footers, or filters
+- **Theme via CSS variables + paired stylesheets** — load both `tabulator_midnight` (dark) and `tabulator_simple` (light), toggle one off via the `disabled` attribute on `prefers-color-scheme` change
 - **Frozen columns** — freeze identifier columns (name, ID) so users can scroll horizontally without losing context
 - **Header filters** — add `headerFilter: true` for searchable columns; use `headerFilter: 'select'` for categorical data
 - **Number formatting** — use `formatter: 'money'` with appropriate `formatterParams` for currency; `formatter: 'progress'` for visual bars
 - **Pagination size** — 15–25 rows is optimal; fewer feels empty, more requires scrolling
-- **Row selection** — enable `selectable: true` with `tabulator-selectable:hover` CSS for clear affordance
-- **Accessibility** — Tabulator adds ARIA roles automatically; ensure your card has a descriptive `<h1>` for screen readers
+- **Row selection** — enable `selectableRows: true`; ensure `:focus-visible` outlines on `.tabulator-row` are preserved
+- **Accessibility** — Tabulator adds `role="row"` / `role="cell"` automatically; add `role="grid"` + `aria-label` on the container and ensure column headers stay reachable by Tab. Arrow-key cell navigation is built-in
+- **Contrast check** — header text (`#94a3b8` on `#1e2130` dark, `#475569` on `#f1f5f9` light) ≥ 4.5:1; body text ≥ 4.5:1 in both themes
 - **Responsive fallback** — on narrow screens, use `responsiveLayout: 'collapse'` to hide lower-priority columns
 
 ---
@@ -549,7 +576,9 @@ table.on('pageLoaded', (pageNum) => {});
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Employee Directory</title>
-  <link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_midnight.min.css" rel="stylesheet">
+  <!-- Theme-aware: load BOTH stylesheets; the inactive one carries the `disabled` attribute -->
+  <link id="tab-theme-dark"  href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_midnight.min.css" rel="stylesheet">
+  <link id="tab-theme-light" href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_simple.min.css"   rel="stylesheet" disabled>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 24px; }
@@ -589,6 +618,27 @@ table.on('pageLoaded', (pageNum) => {});
 
 <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
 <script>
+  // --- Universal theme-detection pattern: data-theme override > OS prefers-color-scheme ---
+  const themeQuery = window.matchMedia('(prefers-color-scheme: light)');
+  function currentTheme() {
+    return document.documentElement.dataset.theme
+        || (themeQuery.matches ? 'light' : 'dark');
+  }
+  function onThemeChange(callback) {
+    new MutationObserver(callback).observe(document.documentElement, {
+      attributes: true, attributeFilter: ['data-theme'],
+    });
+    themeQuery.addEventListener('change', callback);
+  }
+  // Reuses the helper pattern from Step 3 — toggle the inactive sheet via `disabled`
+  function applyTabulatorTheme() {
+    const isLight = currentTheme() === 'light';
+    document.getElementById('tab-theme-dark').disabled  =  isLight;
+    document.getElementById('tab-theme-light').disabled = !isLight;
+  }
+  applyTabulatorTheme();
+  onThemeChange(applyTabulatorTheme);
+
   const data = [
     { id:1, name:'Alice Martin',   dept:'Engineering', role:'Senior Dev',   salary:92000, score:88, active:true,  joined:'2021-03-15' },
     { id:2, name:'Bob Chen',       dept:'Design',      role:'UI Lead',      salary:78000, score:92, active:true,  joined:'2020-07-01' },
@@ -693,10 +743,14 @@ table.on('pageLoaded', (pageNum) => {});
 
 ## Common Mistakes to Avoid
 
-- **Missing CSS file** — the JS alone produces an unstyled, broken layout. Always load `tabulator.min.css` (or a theme variant) in `<head>`
+- **Missing CSS file** — the JS alone produces an unstyled, broken layout. Always load `tabulator_midnight.min.css` (or a theme variant) in `<head>`
+- **Loading only the dark theme CSS** — if `prefers-color-scheme: light` is active the page background flips but Tabulator stays dark; load `tabulator_simple.min.css` alongside it and toggle with `disabled`
 - **Calling methods before `tableBuilt`** — Tabulator initializes asynchronously. Wrap any post-creation logic in `table.on('tableBuilt', () => { ... })`
-- **`height` not set for large datasets** — without a fixed `height`, Tabulator renders all rows at once (no virtual scrolling) and can freeze on 10 000+ rows; always set `height` for large data
+- **`height` not set for large datasets** — without a fixed `height`, Tabulator renders all rows at once (no virtual scrolling) and can freeze on 10 000+ rows; always set `height` for tables above ~500 rows
 - **`layout: 'fitColumns'` with fixed widths on all columns** — if all columns have `width`, there's nothing to distribute and the layout breaks on resize; leave at least one column without a fixed width, or use `layout: 'fitData'`
 - **Filtering `null`/`undefined` values** — Tabulator's built-in sorters and filters handle `null` poorly; normalize data before loading (`null → ''` or `null → 0`)
 - **Remote pagination without server-side implementation** — `paginationMode: 'remote'` requires the server to return `{ "last_page": N, "data": [...] }`; if the server returns a plain array, use `pagination: true` (local mode)
 - **`autoColumns: true` on mixed-type data** — Tabulator infers types from the first row only; if your data has inconsistent types, define columns explicitly instead
+- **`formatter: 'html'` with untrusted input** — renders the cell value as HTML and creates an XSS risk; stick to `'plaintext'` (default) for user-controlled data, or sanitize first
+- **Overriding `:focus-visible` on rows/cells** — keyboard users navigate with arrow keys + Tab; preserve focus outlines for accessibility
+- **Forgetting `aria-label` on the container** — assistive tech sees only "table"; set `<div id="table" role="grid" aria-label="Employee directory">` so the dataset has a name

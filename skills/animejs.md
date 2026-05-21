@@ -1,6 +1,7 @@
 ---
 name: animejs-animation
 description: Create precise, timeline-driven DOM and SVG animations using Anime.js v4, delivered as self-contained HTML artifacts. Use this skill whenever someone needs controlled, choreographed animation on HTML elements — entrance sequences, staggered reveals, interactive micro-animations, SVG morphing, scroll-triggered effects, draggable elements with physics, or any animation that requires exact timing, sequencing, and easing control over DOM/SVG. Trigger on requests like "animate these cards appearing one by one", "make this SVG morph", "create a staggered entrance animation", "animate a loading sequence", "add scroll-triggered animations", "make this draggable with spring physics", or any request for choreographed multi-element animation. Anime.js excels where CSS transitions are too simple and Three.js / p5.js would be overkill — the sweet spot is precise, beautiful DOM animation. Do NOT use for generative art / canvas (→ p5js), 3D WebGL scenes (→ threejs-3d), or static diagrams (→ mermaid-diagrams).
+agents: [dev]
 ---
 
 # Anime.js Animation Skill — v4
@@ -87,17 +88,37 @@ Smooth, choreographed animations: elements entrance with staggered timing, SVG p
 
 ```html
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Animation</title>
   <style>
+    /* ── Theme tokens (dark = default; light via [data-theme="light"] or media query) ── */
+    :root {
+      --bg:     #0f1117;
+      --card:   #1a1d27;
+      --border: rgba(255,255,255,0.08);
+      --text:   #e2e8f0;
+      --muted:  #94a3b8;
+      --accent: #6366f1;
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+      --text: #1e293b; --muted: #475569; --accent: #6366f1;
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+        --text: #1e293b; --muted: #475569;
+      }
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -108,18 +129,31 @@ Smooth, choreographed animations: elements entrance with staggered timing, SVG p
       opacity: 0;             /* initial state — Anime will animate TO opacity: 1 */
       transform: translateY(24px); /* Anime animates FROM here */
     }
+    /* Always-visible focus ring (don't suppress :focus) */
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* Respect reduced-motion preference: disable all animation */
+    @media (prefers-reduced-motion: reduce) {
+      .card { opacity: 1; transform: none; }
+    }
   </style>
 </head>
 <body>
 
-  <!-- Markup -->
+  <!-- Markup; add role="region" + aria-label on animated regions, e.g.
+       <section role="region" aria-label="Feature highlights"> ... </section> -->
 
   <!-- Anime.js UMD LAST, before your script -->
-  <script src="https://cdn.jsdelivr.net/npm/animejs/dist/bundles/anime.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/animejs/dist/bundles/anime.umd.min.js" crossorigin="anonymous"></script>
   <script>
     const { animate, createTimeline, stagger, utils } = anime;
-
-    // All animation code here
+    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!prefersReduced) {
+      // All animation code here
+    } else {
+      // Reveal elements without animation
+      utils.set('.card', { opacity: 1, y: 0 });
+    }
   </script>
 </body>
 </html>
@@ -624,21 +658,51 @@ const snapped2 = utils.snap(35, [0, 50, 100]);  // → 50
 
 ```html
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Entrance Animation</title>
   <style>
+    :root, [data-theme="dark"] {
+      --bg:       #0f1117;
+      --card:     #1a1d27;
+      --border:   rgba(255,255,255,0.07);
+      --bar-bg:   rgba(255,255,255,0.06);
+      --text:     #e2e8f0;
+      --heading:  #f1f5f9;
+      --muted:    #94a3b8;
+      --subtle:   #64748b;
+      --accent:   #6366f1;
+    }
+    [data-theme="light"] {
+      --bg:       #f8fafc;
+      --card:     #ffffff;
+      --border:   rgba(0,0,0,0.08);
+      --bar-bg:   rgba(15,23,42,0.06);
+      --text:     #1e293b;
+      --heading:  #0f172a;
+      --muted:    #475569;
+      --subtle:   #64748b;
+      --accent:   #6366f1;
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme]) {
+        --bg: #f8fafc; --card: #ffffff; --border: rgba(0,0,0,0.08);
+        --bar-bg: rgba(15,23,42,0.06);
+        --text: #1e293b; --heading: #0f172a; --muted: #475569;
+      }
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; padding: 48px 24px; }
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 48px 24px; transition: background 200ms, color 200ms; }
 
     .page-title {
       text-align: center; margin-bottom: 48px;
       opacity: 0; transform: translateY(-20px); /* initial state */
     }
-    .page-title h1 { font-size: 2.2rem; font-weight: 700; color: #f1f5f9; }
-    .page-title p  { color: #64748b; margin-top: 8px; font-size: 0.95rem; }
+    .page-title h1 { font-size: 2.2rem; font-weight: 700; color: var(--heading); }
+    .page-title p  { color: var(--subtle); margin-top: 8px; font-size: 0.95rem; }
 
     .grid {
       display: grid;
@@ -649,14 +713,14 @@ const snapped2 = utils.snap(35, [0, 50, 100]);  // → 50
     }
 
     .card {
-      background: #1a1d27;
-      border: 1px solid rgba(255,255,255,0.07);
+      background: var(--card);
+      border: 1px solid var(--border);
       border-radius: 16px;
       padding: 24px;
       cursor: pointer;
       opacity: 0;               /* start invisible */
       transform: translateY(32px); /* start below */
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, background 200ms;
     }
     .card:hover { border-color: rgba(99,102,241,0.4); }
 
@@ -664,11 +728,11 @@ const snapped2 = utils.snap(35, [0, 50, 100]);  // → 50
       font-size: 2rem; margin-bottom: 14px; display: block;
       transform: scale(0);  /* start collapsed */
     }
-    .card h2  { font-size: 1rem; font-weight: 600; color: #f1f5f9; margin-bottom: 6px; }
-    .card p   { font-size: 0.82rem; color: #64748b; line-height: 1.5; }
+    .card h2  { font-size: 1rem; font-weight: 600; color: var(--heading); margin-bottom: 6px; }
+    .card p   { font-size: 0.82rem; color: var(--subtle); line-height: 1.5; }
     .card-bar {
       margin-top: 18px; height: 3px; border-radius: 2px;
-      background: rgba(255,255,255,0.06); overflow: hidden;
+      background: var(--bar-bg); overflow: hidden;
     }
     .card-bar-fill { height: 100%; width: 0; border-radius: 2px; }
 
@@ -679,8 +743,8 @@ const snapped2 = utils.snap(35, [0, 50, 100]);  // → 50
     .counter {
       text-align: center; opacity: 0;
     }
-    .counter-val { font-size: 2.8rem; font-weight: 800; color: #6366f1; font-variant-numeric: tabular-nums; }
-    .counter-label { font-size: 0.8rem; color: #64748b; margin-top: 4px; }
+    .counter-val { font-size: 2.8rem; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
+    .counter-label { font-size: 0.8rem; color: var(--subtle); margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -815,3 +879,6 @@ const snapped2 = utils.snap(35, [0, 50, 100]);  // → 50
 - **`stagger` with a single element** — `stagger` is a no-op when targeting a single element (there's no second element to offset). This is not a bug but can be confusing when testing
 - **Mixing `autoplay: onScroll(...)` with manual `play()`** — once `autoplay` is set to a scroll observer, the animation's playback is owned by the observer. Calling `play()` manually may conflict. Use `onScroll` OR manual control, not both
 - **Morphing SVG paths with different point counts** — `svg.morphTo` works best when both paths have the same number of points. For different point counts, increase the precision parameter: `svg.morphTo('#shape2', 4)` — higher values interpolate more intermediate points at the cost of performance
+- **Ignoring `prefers-reduced-motion`** — vestibular and motion-sensitivity users may experience nausea or seizures from unrequested motion. Always gate non-essential animation behind `window.matchMedia('(prefers-reduced-motion: reduce)')` and provide the final state instead
+- **Suppressing focus outlines** — never `outline: none` without a replacement. Keep `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }` so keyboard users can see where they are
+- **Insufficient color contrast on animated text** — verify ≥ 4.5:1 contrast for body text and ≥ 3:1 for large/UI text against the (possibly animated) background; muted greys like `#64748b` on `#0f1117` are only ~5.6:1 — borderline for small text

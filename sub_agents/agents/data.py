@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
+from tools.skills_loader import find_relevant as find_relevant_skills
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -61,6 +62,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
                 pass
 
     context_parts: list[str] = []
+
+    # Skills méthodologiques (recettes SQL, tests stats, patterns DuckDB…)
+    skill_hits = find_relevant_skills(user_text, agent="data")
+    if skill_hits:
+        skill_block = "\n\n".join(f"### Skill: {n}\n{c[:5000]}" for _, n, c in skill_hits)
+        context_parts.append(
+            "## Data analysis recipes (apply when relevant to the question)\n" + skill_block
+        )
 
     # Calculatrice si expression mathématique détectée
     math_expr = _extract_math_expression(user_text)

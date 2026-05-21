@@ -1,6 +1,7 @@
 ---
 name: prism-code
 description: Add syntax highlighting to code blocks in HTML artifacts using Prism.js. Use this skill whenever someone needs beautifully highlighted code snippets in a web page — documentation pages, tutorials, code cards, API reference pages, or any artifact displaying source code. Trigger on requests like "highlight this code", "show code with syntax coloring", "create a code snippet display", "make a documentation page with code examples", or any prompt that includes code that should be visually highlighted. Do NOT use for interactive code editors (→ CodeMirror, not in stack), presentation slides with code (→ reveal-slides skill which includes highlight.js), or data charts (→ chartjs/plotly skill).
+agents: [dev]
 ---
 
 # Prism.js Code Highlighting Skill
@@ -54,8 +55,13 @@ Code blocks with language-appropriate syntax coloring, optional line numbers, hi
 ## Step 1 — CDN Setup
 
 ```html
-<!-- Prism.js Theme (Tomorrow Night) -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+<!-- Dark theme (default) -->
+<link id="prism-theme" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+
+<!-- Light theme (loaded but disabled — toggled via JS) -->
+<link id="prism-theme-light" rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css"
+      disabled>
 
 <!-- Line numbers plugin (optional) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css">
@@ -66,31 +72,36 @@ Code blocks with language-appropriate syntax coloring, optional line numbers, hi
 <!-- Prism.js Core -->
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
 
-<!-- Language components (load what you need) -->
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-yaml.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-typescript.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-css.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-sql.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-go.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-rust.min.js"></script>
+<!-- Autoloader: pulls in language components on demand (preferred over hand-listing every language) -->
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"
+        data-autoloader-path="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/"></script>
 
 <!-- Plugins -->
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 ```
 
-> Core includes: HTML, CSS, JavaScript, C-like. Load additional languages via components. Prism auto-highlights on page load.
+> Core includes: HTML, CSS, JavaScript, C-like. The **autoloader** fetches `prism-<lang>.min.js` from the CDN as it encounters new `language-*` classes — much cleaner than maintaining a long list of `<script>` tags. Use a hand-list only when you need offline-safe loading.
 
-### Available themes:
-- `prism.min.css` — light (default)
-- `prism-dark.min.css` — dark
-- `prism-tomorrow.min.css` — Tomorrow Night (recommended for dark)
-- `prism-okaidia.min.css` — Okaidia dark
-- `prism-twilight.min.css` — Twilight
-- `prism-coy.min.css` — Coy (light, with shadow)
+### Theme pairs (one dark + one light, toggle via `disabled`)
+| Dark              | Light       |
+|-------------------|-------------|
+| `prism-tomorrow`  | `prism`     |
+| `prism-okaidia`   | `prism-coy` |
+| `prism-twilight`  | `prism-solarizedlight` |
+
+### Theme-switch helper (called on load and on `prefers-color-scheme` change):
+```javascript
+function applyPrismTheme() {
+  const isLight = document.documentElement.dataset.theme === 'light' ||
+    (!document.documentElement.dataset.theme &&
+     matchMedia('(prefers-color-scheme: light)').matches);
+  document.getElementById('prism-theme').disabled       =  isLight;
+  document.getElementById('prism-theme-light').disabled = !isLight;
+}
+applyPrismTheme();
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyPrismTheme);
+```
 
 ---
 
@@ -103,43 +114,68 @@ Code blocks with language-appropriate syntax coloring, optional line numbers, hi
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Code Reference</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+  <link id="prism-theme"       rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+  <link id="prism-theme-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css" disabled>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css">
   <style>
+    :root {
+      --bg:        #0f1117;
+      --card:      #1a1d27;
+      --border:    rgba(255,255,255,0.08);
+      --code-bg:   #0f1117;
+      --code-bdr:  rgba(255,255,255,0.06);
+      --text:      #e2e8f0;
+      --title:     #f1f5f9;
+      --body:      #cbd5e1;
+      --muted:     #64748b;
+      --line-bdr:  rgba(255,255,255,0.08);
+      --line-num:  #4a4d5a;
+      --inline-bg: rgba(255,255,255,0.06);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --card: #ffffff;
+        --border: rgba(0,0,0,0.08);
+        --code-bg: #f1f5f9; --code-bdr: rgba(0,0,0,0.08);
+        --text: #1e293b; --title: #0f172a; --body: #334155; --muted: #475569;
+        --line-bdr: rgba(0,0,0,0.08); --line-num: #94a3b8;
+        --inline-bg: rgba(0,0,0,0.06);
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f8fafc; --card: #ffffff;
+      --border: rgba(0,0,0,0.08);
+      --code-bg: #f1f5f9; --code-bdr: rgba(0,0,0,0.08);
+      --text: #1e293b; --title: #0f172a; --body: #334155; --muted: #475569;
+      --line-bdr: rgba(0,0,0,0.08); --line-num: #94a3b8;
+      --inline-bg: rgba(0,0,0,0.06);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f1117;
-      color: #e2e8f0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-height: 100vh;
-      padding: 24px;
+      background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; align-items: center;
+      min-height: 100vh; padding: 24px;
     }
     .card {
-      width: 100%;
-      max-width: 800px;
-      background: #1a1d27;
-      border-radius: 16px;
-      padding: 28px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      width: 100%; max-width: 800px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.15);
       margin-bottom: 20px;
     }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    h2 { font-size: 1rem; font-weight: 600; color: #f1f5f9; margin: 20px 0 8px; }
-    p.sub { font-size: 0.82rem; color: #64748b; margin-bottom: 20px; }
-    p { font-size: 0.88rem; line-height: 1.7; color: #cbd5e1; margin-bottom: 12px; }
+    h1 { font-size: 1.15rem; font-weight: 600; color: var(--title); margin-bottom: 4px; }
+    h2 { font-size: 1rem;    font-weight: 600; color: var(--title); margin: 20px 0 8px; }
+    p.sub { font-size: 0.82rem; color: var(--muted); margin-bottom: 20px; }
+    p { font-size: 0.88rem; line-height: 1.7; color: var(--body); margin-bottom: 12px; }
 
     /* Override Prism background to match card */
     pre[class*="language-"] {
-      background: #0f1117 !important;
+      background: var(--code-bg) !important;
       border-radius: 10px;
-      border: 1px solid rgba(255,255,255,0.06);
-      margin: 12px 0;
-      padding: 16px 20px;
-      font-size: 13px;
-      line-height: 1.6;
+      border: 1px solid var(--code-bdr);
+      margin: 12px 0; padding: 16px 20px;
+      font-size: 13px; line-height: 1.6;
     }
     code[class*="language-"] {
       font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
@@ -147,15 +183,15 @@ Code blocks with language-appropriate syntax coloring, optional line numbers, hi
     }
     /* Inline code */
     :not(pre) > code {
-      background: rgba(255,255,255,0.06);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 0.85em;
-      color: #e2e8f0;
+      background: var(--inline-bg);
+      padding: 2px 6px; border-radius: 4px;
+      font-size: 0.85em; color: var(--text);
     }
-    /* Line numbers left border */
-    .line-numbers .line-numbers-rows { border-right-color: rgba(255,255,255,0.08); }
-    .line-numbers .line-numbers-rows > span::before { color: #4a4d5a; }
+    /* Line numbers */
+    .line-numbers .line-numbers-rows { border-right-color: var(--line-bdr); }
+    .line-numbers .line-numbers-rows > span::before { color: var(--line-num); }
+    /* Preserve focus-visible outlines on the copy button */
+    :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -168,7 +204,20 @@ Code blocks with language-appropriate syntax coloring, optional line numbers, hi
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"
+          data-autoloader-path="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/"></script>
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+  <script>
+    function applyPrismTheme() {
+      const isLight = document.documentElement.dataset.theme === 'light' ||
+        (!document.documentElement.dataset.theme &&
+         matchMedia('(prefers-color-scheme: light)').matches);
+      document.getElementById('prism-theme').disabled       =  isLight;
+      document.getElementById('prism-theme-light').disabled = !isLight;
+    }
+    applyPrismTheme();
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyPrismTheme);
+  </script>
 </body>
 </html>
 ```
@@ -376,7 +425,9 @@ language-diff
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>API Reference</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+  <!-- Theme-aware: load BOTH Prism themes; the inactive one carries the `disabled` attribute -->
+  <link id="prism-theme"       rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+  <link id="prism-theme-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css" disabled>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/toolbar/prism-toolbar.min.css">
   <style>
@@ -482,6 +533,28 @@ print(f"Created: {new_user.id}")</code></pre>
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/toolbar/prism-toolbar.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+  <script>
+    // --- Universal theme-detection pattern: data-theme override > OS prefers-color-scheme ---
+    const themeQuery = window.matchMedia('(prefers-color-scheme: light)');
+    function currentTheme() {
+      return document.documentElement.dataset.theme
+          || (themeQuery.matches ? 'light' : 'dark');
+    }
+    function onThemeChange(callback) {
+      new MutationObserver(callback).observe(document.documentElement, {
+        attributes: true, attributeFilter: ['data-theme'],
+      });
+      themeQuery.addEventListener('change', callback);
+    }
+    // Reuses the helper pattern from Step 3 — toggle the inactive sheet via `disabled`
+    function applyPrismTheme() {
+      const isLight = currentTheme() === 'light';
+      document.getElementById('prism-theme').disabled       =  isLight;
+      document.getElementById('prism-theme-light').disabled = !isLight;
+    }
+    applyPrismTheme();
+    onThemeChange(applyPrismTheme);
+  </script>
 </body>
 </html>
 ```
@@ -491,12 +564,13 @@ print(f"Created: {new_user.id}")</code></pre>
 ## Common Mistakes to Avoid
 
 - **Wrong language class** — the class must be on `<code>`, not `<pre>`: `<pre><code class="language-python">` — putting it on `<pre>` alone won't work for some plugins
-- **Unescaped HTML in code** — `<div>` inside a `<code>` block will be parsed as HTML; use `&lt;div&gt;` instead
-- **Missing language component** — core only includes HTML/CSS/JS/C-like; load `prism-python.min.js`, `prism-bash.min.js`, etc. for other languages
+- **Unescaped HTML in code** — `<div>` inside a `<code>` block will be parsed as HTML; use `&lt;div&gt;` instead. Never inject untrusted user input into `innerHTML` of a `<code>` — set `textContent` then call `Prism.highlightElement()`
+- **Missing language component** — core only includes HTML/CSS/JS/C-like; either load `prism-<lang>.min.js` explicitly or use the **autoloader** plugin and let it fetch components on demand
 - **Toolbar without toolbar plugin** — copy-to-clipboard depends on the toolbar plugin; load `prism-toolbar.min.js` before `prism-copy-to-clipboard.min.js`
-- **Line numbers not working** — requires both the CSS and JS plugin files AND the `line-numbers` class on the `<pre>` element
-- **Dark theme not matching** — Prism's Tomorrow theme has its own background (`#2d2d2d`); override with `!important` to match `#0f1117`
-- **Prism.highlightAll() unnecessary on load** — Prism auto-highlights on DOMContentLoaded; only call `highlightAll()` or `highlightElement()` for dynamically added content
+- **Line numbers + `padding-top` glitch** — the line-numbers plugin positions numbers absolutely against the `<pre>`'s padding; uneven top/bottom padding causes misalignment. Use symmetric padding (e.g. `padding: 16px 20px`)
+- **Theme not matching active CSS-variable theme** — toggle both `prism-tomorrow` and a light counterpart by disabling/enabling the right `<link>` on `prefers-color-scheme` change
+- **`Prism.highlightAll()` unnecessary on load** — Prism auto-highlights on DOMContentLoaded; only call `highlightAll()` or `highlightElement()` for dynamically added content
 - **Leading whitespace** — code inside `<code>` preserves whitespace; start content on the same line as the `<code>` tag or use `data-trim` patterns
 - **Script order** — load `prism.min.js` before language components and plugins; they register against the global `Prism` object
-- **Multiple themes loaded** — only load one theme CSS file; loading multiple causes conflicts
+- **Multiple themes loaded simultaneously** — only one Prism theme stylesheet may be active at any time; if both are enabled their selectors collide. Use the `disabled` attribute on `<link>` to toggle
+- **Suppressing copy-button focus outlines** — keyboard users tab to the copy button; don't override `:focus-visible` to `outline: none`

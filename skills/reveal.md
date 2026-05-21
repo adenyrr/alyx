@@ -1,6 +1,7 @@
 ---
 name: reveal-slides
 description: Create interactive HTML presentation slides using Reveal.js, delivered as self-contained HTML artifacts. Use this skill whenever someone needs a slideshow, pitch deck, lecture slides, or any multi-slide presentation with transitions, fragments, code highlighting, speaker notes, or markdown-driven content. Trigger on requests like "make a presentation", "create slides about X", "build a pitch deck", "design lecture slides", or any prompt needing a slide deck. Do NOT use for scrollytelling (→ gsap-animation skill), data dashboards (→ chartjs/recharts skill), or static single-page infographics (→ creative skill).
+agents: [dev]
 ---
 
 # Reveal.js Slides Skill
@@ -51,15 +52,18 @@ A polished slide deck with smooth transitions between slides, click-to-reveal fr
 
 ## Step 1 — CDN Setup
 
+Reveal.js v5 ships plugins as classic `<script>` files that register globals (`RevealHighlight`, `RevealMarkdown`, `RevealNotes`). Load them **after** `reveal.js` core, then pass the globals via the `plugins` array.
+
 ```html
-<!-- Reveal.js CSS -->
+<!-- Reveal.js core CSS -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
 
-<!-- Reveal.js Core -->
+<!-- Reveal.js core -->
 <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js"></script>
 
-<!-- Syntax highlighting plugin (optional) -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/monokai.css">
+<!-- Syntax highlighting plugin (light + dark code themes; toggle via JS) -->
+<link id="reveal-code-dark"  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/monokai.css">
+<link id="reveal-code-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/zenburn.css" disabled>
 <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/highlight.js"></script>
 
 <!-- Markdown plugin (optional) -->
@@ -69,7 +73,7 @@ A polished slide deck with smooth transitions between slides, click-to-reveal fr
 <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/notes/notes.js"></script>
 ```
 
-> Do NOT load a default theme CSS (`black.css`, `white.css`, etc.) — we apply a custom dark theme via inline styles.
+> Do NOT load both `black.css` and `white.css` from `dist/theme/` — they fight each other. We provide custom dark **and** light tokens via CSS variables in the shell, so the page theme matches `prefers-color-scheme` automatically.
 
 ---
 
@@ -85,8 +89,7 @@ A polished slide deck with smooth transitions between slides, click-to-reveal fr
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/monokai.css">
   <style>
-    /* Custom dark theme */
-    .reveal { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    /* Theme tokens — Reveal.js v5 reads --r-* vars */
     :root {
       --r-background-color: #0f1117;
       --r-main-font-size: 32px;
@@ -96,23 +99,50 @@ A polished slide deck with smooth transitions between slides, click-to-reveal fr
       --r-link-color: #6366f1;
       --r-link-color-hover: #818cf8;
       --r-selection-background-color: rgba(99,102,241,0.3);
+      --card-bg: #1a1d27;
+      --card-bdr: rgba(255,255,255,0.08);
+      --muted: #94a3b8;
+      --xmuted: #64748b;
+      --body:  #cbd5e1;
     }
-    .reveal { color: var(--r-main-color); }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --r-background-color: #f8fafc;
+        --r-main-color: #1e293b;
+        --r-heading-color: #0f172a;
+        --card-bg: #ffffff;
+        --card-bdr: rgba(0,0,0,0.08);
+        --muted: #475569;
+        --xmuted: #64748b;
+        --body:  #334155;
+      }
+    }
+    [data-theme="light"] {
+      --r-background-color: #f8fafc;
+      --r-main-color: #1e293b;
+      --r-heading-color: #0f172a;
+      --card-bg: #ffffff;
+      --card-bdr: rgba(0,0,0,0.08);
+      --muted: #475569;
+      --body:  #334155;
+    }
+    .reveal { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--r-main-color); }
     .reveal h1, .reveal h2, .reveal h3 { color: var(--r-heading-color); }
     .reveal h1 { font-size: 2.2em; }
     .reveal h2 { font-size: 1.5em; }
     .reveal h3 { font-size: 1.1em; }
 
     .reveal .accent { color: #6366f1; }
-    .reveal .subtitle { color: #94a3b8; font-size: 0.7em; }
-    .reveal .small { font-size: 0.6em; color: #64748b; }
+    .reveal .subtitle { color: var(--muted); font-size: 0.7em; }
+    .reveal .small { font-size: 0.6em; color: var(--xmuted); }
 
     .reveal ul { text-align: left; }
-    .reveal li { margin-bottom: 0.4em; font-size: 0.85em; line-height: 1.6; color: #cbd5e1; }
+    .reveal li { margin-bottom: 0.4em; font-size: 0.85em; line-height: 1.6; color: var(--body); }
 
     .reveal pre { box-shadow: none; }
     .reveal pre code {
-      background: #1a1d27;
+      background: var(--card-bg);
+      border: 1px solid var(--card-bdr);
       border-radius: 10px;
       padding: 16px 20px;
       font-size: 0.55em;
@@ -120,20 +150,20 @@ A polished slide deck with smooth transitions between slides, click-to-reveal fr
       max-height: 420px;
     }
 
-    .reveal .slide-number { color: #64748b; font-size: 14px; }
+    .reveal .slide-number { color: var(--xmuted); font-size: 14px; }
     .reveal .controls { color: #6366f1; }
     .reveal .progress span { background: #6366f1; }
 
     /* Card style for content blocks */
     .card-slide {
-      background: #1a1d27;
-      border-radius: 16px;
-      padding: 32px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
-      text-align: left;
-      max-width: 700px;
-      margin: 0 auto;
+      background: var(--card-bg);
+      border: 1px solid var(--card-bdr);
+      border-radius: 16px; padding: 32px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.25);
+      text-align: left; max-width: 700px; margin: 0 auto;
     }
+    /* Preserve focus-visible outlines */
+    :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -150,11 +180,14 @@ A polished slide deck with smooth transitions between slides, click-to-reveal fr
   <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/highlight.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/notes/notes.js"></script>
   <script>
+    // Respect prefers-reduced-motion: use 'none' transition
+    const prefersReduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     Reveal.initialize({
       hash: true,
       slideNumber: true,
-      transition: 'slide',
-      backgroundTransition: 'fade',
+      transition:          prefersReduce ? 'none' : 'slide',
+      backgroundTransition: prefersReduce ? 'none' : 'fade',
+      // Reveal v5 plugin loading — pass the globals registered by the plugin scripts
       plugins: [RevealHighlight, RevealNotes],
     });
   </script>
@@ -530,12 +563,16 @@ document.querySelectorAll('.card').forEach(el => {
 ## Common Mistakes to Avoid
 
 - **No `reveal.css` loaded** — the framework won't render without its core CSS; always include it before any theme/custom CSS
-- **Loading a default theme AND custom styles** — themes like `black.css` override your custom CSS; either use a theme OR write custom styles, not both
+- **Loading a default theme AND custom styles** — themes like `black.css` and `white.css` set hard `body { background }` rules that fight custom CSS variables; either pick a built-in theme OR ship your own tokens, not both
+- **v5 plugin loading mistakes** — Reveal v5 plugins are classic `<script>` files that register globals (`RevealHighlight`, `RevealMarkdown`, `RevealNotes`). Pass those globals into `plugins:` — not strings, not `import()` results
 - **Nesting `<section>` wrong** — horizontal slides are siblings; vertical sub-slides are nested `<section>` inside a parent `<section>`
 - **`data-line-numbers` without highlight plugin** — progressive code highlights require `RevealHighlight` in the plugins array
+- **Ignoring `prefers-reduced-motion`** — slide transitions and fragment animations can trigger motion sickness; set `transition: 'none'` when `matchMedia('(prefers-reduced-motion: reduce)').matches`
+- **Hard-coded dark colours** — derive everything from `--r-*` and custom tokens so the deck stays readable when the user prefers a light scheme
 - **Too much content per slide** — aim for under 50 words of text and under 15 lines of code per slide
 - **Forgetting `data-trim`** — without `data-trim` on `<code>`, leading/trailing whitespace appears in the code block
 - **Auto-animate without matching `data-id`** — elements only morph between slides if they share the same `data-id` value
 - **Missing `hash: true`** — without it, refreshing the page loses your slide position
+- **Suppressing focus outlines** — keyboard users use Tab/Enter to navigate; do not override `:focus-visible`
 - **No speaker notes** — every meaningful slide should have `<aside class="notes">` for presenter preparation
 - **Testing without pressing S** — always test speaker view (press S) to verify notes and timer work correctly

@@ -65,6 +65,7 @@ _AGENT_ICONS = {
     "rag":       "📚 Documents",
     "geo":       "🗺️ Géographie",
     "reasoning": "🧩 Raisonnement",
+    "writer":    "✍️ Rédaction",
 }
 
 # Noms courts des modèles pour la signature
@@ -89,6 +90,7 @@ _AGENT_SHORT_NAMES: dict[str, str] = {
     "rag":        "Documents",
     "geo":        "Géographie",
     "reasoning":  "Raisonnement",
+    "writer":     "Rédaction",
 }
 
 # Prix modèles en $/1M tokens {input, output}
@@ -118,6 +120,7 @@ _AGENT_MODULES: dict[str, str] = {
     "image_gen": "agents.image_gen",
     "rag":       "agents.rag_agent",
     "reasoning": "agents.reasoning",
+    "writer":    "agents.writer",
 }
 
 _ALYX_SYSTEM_TEMPLATE = """\
@@ -354,6 +357,7 @@ class Pipeline:
         model_memory: str = Field(default="openrouter/gpt-oss", description="Modèle agent Mémoire (knowledge graph)")
         model_rag: str = Field(default="openrouter/gpt-oss", description="Modèle agent Documents (RAG Qdrant)")
         model_reasoning: str = Field(default="openrouter/deepseek", description="Modèle agent Raisonnement (sequential-thinking, analyses complexes)")
+        model_writer: str = Field(default="openrouter/deepseek", description="Modèle agent Rédaction (documents longue forme, prose structurée)")
 
         # --- Génération d'images (Pollinations.ai — appel direct GET, sans passer par LiteLLM) ---
         enable_image_gen: bool = Field(default=True, description="Activer la génération d'images via Pollinations.ai")
@@ -425,6 +429,7 @@ class Pipeline:
             "image_gen":  "pollinations.ai",
             "rag":        self.valves.model_rag,
             "reasoning":  self.valves.model_reasoning,
+            "writer":     self.valves.model_writer,
             # Paramètres Pollinations transmis aux agents via le dict models
             "_pollinations": {
                 "enable":  self.valves.enable_image_gen,

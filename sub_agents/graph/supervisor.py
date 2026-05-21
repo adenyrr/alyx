@@ -35,7 +35,7 @@ _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 
 _VALID_AGENTS = {
     "wikipedia", "web", "doc", "dev", "media",
-    "data", "geo", "memory", "image_gen", "rag", "reasoning",
+    "data", "geo", "memory", "image_gen", "rag", "reasoning", "writer",
 }
 
 _SYSTEM = """\
@@ -60,6 +60,13 @@ Given the user's last message, output ONLY a JSON array of agent names to invoke
   "reasoning" → COMPLEX analytical decomposition: multi-variable risk analysis, strategic planning,
                   pros/cons comparison, differential diagnosis, multi-step logical reasoning,
                   decision frameworks. NOT for factual questions, NOT for code, NOT for images.
+  "writer"    → LONG-FORM DOCUMENT AUTHORING in prose: business reports, technical RFCs,
+                  academic papers, whitepapers, meeting minutes, blog posts, press releases,
+                  cover letters, CVs, professional emails. Produces structured Markdown
+                  (optionally converted to .docx/.tex/.epub via pandoc if explicitly requested).
+                  Use writer when the user asks to "rédige", "compose", "write a report/letter/email",
+                  "draft a document", "prepare a memo", or mentions a specific document type.
+                  NOT for short conversational replies (Alyx handles those), NOT for code (use dev).
 
 ═══════════════════════════════════════════════════════
  ROUTING RULES
@@ -105,7 +112,18 @@ RULE 9 — REASONING:
   "reasoning" can combine with "doc" for academic evidence-backed analysis: ["reasoning", "doc"].
   NEVER combine "reasoning" with "image_gen", "geo", or "data".
 
-RULE 10 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
+RULE 10b — WRITER COMBINATIONS:
+  "writer" is often the SECOND phase of a sequential workflow that collects facts first.
+  Common patterns:
+    "Rédige un rapport business sur X" (no prior research needed) → ["writer"]
+    "Compose un mémo stratégique sur ce SWOT" → {"routing": ["reasoning"], "routing_next": ["writer"]}
+    "Écris une revue de littérature sur Y" → {"routing": ["doc"], "routing_next": ["writer"]}
+    "Prépare un rapport data avec les chiffres de ventes" → {"routing": ["data"], "routing_next": ["writer"]}
+    "Press release sur l'actualité X" → {"routing": ["web", "wikipedia"], "routing_next": ["writer"]}
+  Use writer ALONE when the user gives all the facts in the message.
+  Use writer in phase 2 when facts must be fetched first (doc, web, data, reasoning).
+
+RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   When task B genuinely CANNOT run without task A's output, use JSON object format:
     {"routing": ["<phase1_agents>"], "routing_next": ["<phase2_agents>"]}
   Phase 1 runs fully first, THEN phase 2 receives phase 1's results as context.
@@ -161,6 +179,15 @@ RULE 10 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "Recherche les coordonnées GPS de Paris, Lyon, Marseille et affiche les sur une carte Leaflet" → {"routing": ["geo"], "routing_next": ["dev"]}
   "Get the latest stock price of LVMH and Tesla, and build a comparison chart" → {"routing": ["data"], "routing_next": ["dev"]}
   "Trouve les 5 volcans les plus actifs et leurs coordonnées, puis affiche-les sur une carte" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+  "Rédige-moi une lettre de motivation pour ce poste" → ["writer"]
+  "Compose un email professionnel pour décliner une réunion" → ["writer"]
+  "Écris un CV de développeur senior en Markdown" → ["writer"]
+  "Prépare un compte-rendu de réunion structuré" → ["writer"]
+  "Rédige un rapport business sur le marché des EV en .docx" → ["writer"]
+  "Synthétise une revue de littérature sur Alzheimer en rapport académique" → {"routing": ["doc"], "routing_next": ["writer"]}
+  "SWOT du marché du SaaS B2B puis transforme-le en mémo stratégique" → {"routing": ["reasoning"], "routing_next": ["writer"]}
+  "Récupère les chiffres de vente Tesla 2024 et fais un rapport investisseur" → {"routing": ["data"], "routing_next": ["writer"]}
+  "Press release sur la nouvelle réglementation européenne sur l'IA" → {"routing": ["web", "wikipedia"], "routing_next": ["writer"]}
 """
 
 
