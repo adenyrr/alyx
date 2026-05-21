@@ -359,6 +359,24 @@ class Pipeline:
         model_reasoning: str = Field(default="openrouter/deepseek", description="Modèle agent Raisonnement (sequential-thinking, analyses complexes)")
         model_writer: str = Field(default="openrouter/deepseek", description="Modèle agent Rédaction (documents longue forme, prose structurée)")
 
+        # --- Limites de sources par agent (injectées via state._sources) ---
+        sources_web_ddg_max:         int = Field(default=5, ge=1, le=10, description="Web — nombre max de résultats DuckDuckGo bruts")
+        sources_web_fetch:           int = Field(default=3, ge=1, le=10, description="Web — nombre de pages visitées en parallèle après DDG")
+        sources_wikipedia_articles:  int = Field(default=3, ge=1, le=10, description="Wikipedia — nombre d'articles cherchés + résumés")
+        sources_doc_papers:          int = Field(default=8, ge=3, le=30, description="Doc — nombre de papiers académiques retournés par paper-search")
+        sources_doc_scihub:          int = Field(default=3, ge=0, le=10, description="Doc — nombre de textes intégraux sci-hub à tenter (0 = désactivé)")
+        sources_rag_top_k:           int = Field(default=5, ge=1, le=20, description="RAG — nombre de chunks Qdrant retournés par requête")
+        sources_geo_limit:           int = Field(default=3, ge=1, le=5,  description="Geo — nombre de candidats OSM pour le géocodage (>1 = désambiguïsation)")
+        sources_reasoning_steps:     int = Field(default=5, ge=2, le=8,  description="Reasoning — nombre max d'étapes analytiques sequential-thinking")
+
+        # --- Feature toggles ---
+        enable_scihub:               bool = Field(default=True, description="Doc — autoriser l'accès sci-hub (vérifier la légalité dans ta juridiction)")
+        enable_playwright_fallback:  bool = Field(default=True, description="Web/Doc — activer le fallback Playwright (navigateur réel) si fetch-web échoue")
+        enable_writer_conversion:    bool = Field(default=True, description="Writer — activer la conversion pandoc (DOCX/EPUB/ODT/TEX/HTML/RTF)")
+
+        # --- Limite de troncature des contenus externes injectés dans les prompts ---
+        truncate_external_content:   int = Field(default=4000, ge=500, le=20000, description="Caractères max par contenu externe (page web, transcript, chunk RAG, full-text…) avant injection prompt")
+
         # --- Génération d'images (Pollinations.ai — appel direct GET, sans passer par LiteLLM) ---
         enable_image_gen: bool = Field(default=True, description="Activer la génération d'images via Pollinations.ai")
         pollinations_api_key: str = Field(default="", description="Clé API Pollinations.ai (optionnelle — gratuit sans clé pour les modèles de base)")
@@ -518,6 +536,23 @@ class Pipeline:
             # ressources autorisées par OpenWebUI pour ce chat. L'agent rag s'en
             # sert pour filtrer Qdrant (cf. tools/rag_client.search).
             "_owui": _extract_owui_context(body),
+            # Limites de sources + feature toggles, lus par les agents qui en
+            # ont besoin via state.get("_sources"). Sert de dictionnaire partagé
+            # pour découpler les valves de chaque agent.
+            "_sources": {
+                "web_ddg_max":        self.valves.sources_web_ddg_max,
+                "web_fetch":          self.valves.sources_web_fetch,
+                "wikipedia_articles": self.valves.sources_wikipedia_articles,
+                "doc_papers":         self.valves.sources_doc_papers,
+                "doc_scihub":         self.valves.sources_doc_scihub,
+                "rag_top_k":          self.valves.sources_rag_top_k,
+                "geo_limit":          self.valves.sources_geo_limit,
+                "reasoning_steps":    self.valves.sources_reasoning_steps,
+                "enable_scihub":              self.valves.enable_scihub,
+                "enable_playwright_fallback": self.valves.enable_playwright_fallback,
+                "enable_writer_conversion":   self.valves.enable_writer_conversion,
+                "truncate_chars":     self.valves.truncate_external_content,
+            },
         }
 
         # 2. Lancer la coroutine graphe+synthèse et lire les tokens depuis la queue

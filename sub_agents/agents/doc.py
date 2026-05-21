@@ -130,6 +130,13 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
 
     context_parts: list[str] = []
 
+    # Limites pilotées par les valves OpenWebUI
+    limits = state.get("_sources") or {}
+    papers_limit   = int(limits.get("doc_papers", 8))
+    scihub_count   = int(limits.get("doc_scihub", 3))
+    enable_scihub  = bool(limits.get("enable_scihub", True))
+    truncate_chars = int(limits.get("truncate_chars", 4000))
+
     # 1bis. Skills méthodologiques (PRISMA, GRADE, revues systématiques…)
     skill_hits = find_relevant_skills(user_text, agent="doc")
     if skill_hits:
@@ -157,12 +164,12 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     except Exception as exc:
         context_parts.append(f"## Sequential-thinking unavailable: {exc}")
 
-    # 3. Recherche académique
+    # 3. Recherche académique (limite pilotée par la valve sources_doc_papers)
     await _emit("📚 Recherche dans les bases académiques…")
     try:
         papers_result = await call_tool("paper-search", "search_papers", {
             "query": keywords,
-            "limit": 8,
+            "limit": papers_limit,
         })
         papers_str = json.dumps(papers_result, ensure_ascii=False, indent=2)
         context_parts.append(
@@ -170,21 +177,22 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             f"<untrusted_content source=\"paper-search:{keywords!r}\">\n{papers_str[:5000]}\n</untrusted_content>"
         )
 
-        # 4. Pour les 3 premiers DOIs : fetch sci-hub EN PARALLÈLE
-        dois = _extract_dois(papers_result)[:3]
-        if dois:
-            await _emit(f"📄 Récupération parallèle de {len(dois)} article(s) via Sci-Hub…")
-            fulltexts = await asyncio.gather(
-                *(_fetch_scihub(doi) for doi in dois),
-                return_exceptions=True,
-            )
-            for doi, fulltext in zip(dois, fulltexts):
-                if isinstance(fulltext, BaseException) or not fulltext:
-                    continue
-                context_parts.append(
-                    f"## Full text DOI:{doi}\n"
-                    f"<untrusted_content source=\"sci-hub:{doi}\">\n{fulltext}\n</untrusted_content>"
+        # 4. Sci-hub si activé par la valve enable_scihub (valeur 0 désactive aussi).
+        if enable_scihub and scihub_count > 0:
+            dois = _extract_dois(papers_result)[:scihub_count]
+            if dois:
+                await _emit(f"📄 Récupération parallèle de {len(dois)} article(s) via Sci-Hub…")
+                fulltexts = await asyncio.gather(
+                    *(_fetch_scihub(doi) for doi in dois),
+                    return_exceptions=True,
                 )
+                for doi, fulltext in zip(dois, fulltexts):
+                    if isinstance(fulltext, BaseException) or not fulltext:
+                        continue
+                    context_parts.append(
+                        f"## Full text DOI:{doi}\n"
+                        f"<untrusted_content source=\"sci-hub:{doi}\">\n{fulltext[:truncate_chars]}\n</untrusted_content>"
+                    )
     except Exception as exc:
         context_parts.append(f"## Paper search failed: {exc}")
 

@@ -80,12 +80,16 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
 
     # 2. Recherche Wikipedia via MCPO
     # wikipedia-mcp expose `search_wikipedia` (pas `search`) + `get_summary`.
-    # On enchaîne : search → top 3 titres → résumés courts → synthèse.
+    # On enchaîne : search → top N titres → résumés courts → synthèse.
+    # N piloté par la valve sources_wikipedia_articles.
+    limits = state.get("_sources") or {}
+    articles_n = int(limits.get("wikipedia_articles", 3))
+
     wiki_raw = ""
     try:
         await _emit(f"📖 Recherche Wikipédia : {keywords}")
-        search_result = await call_tool("wikipedia", "search_wikipedia", {"query": keywords, "limit": 3})
-        titles = _extract_titles(search_result)
+        search_result = await call_tool("wikipedia", "search_wikipedia", {"query": keywords, "limit": articles_n})
+        titles = _extract_titles(search_result, max_n=articles_n)
         summaries: list[str] = []
         if titles:
             await _emit(f"📄 Résumés des {len(titles)} article(s)…")
@@ -124,7 +128,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     }
 
 
-def _extract_titles(search_payload) -> list[str]:
+def _extract_titles(search_payload, max_n: int = 3) -> list[str]:
     """Extrait les titres d'articles depuis la réponse `search_wikipedia`.
 
     Le format peut varier selon la version : dict avec `results: [{title, snippet, ...}]`,
@@ -136,15 +140,15 @@ def _extract_titles(search_payload) -> list[str]:
         if isinstance(content, list) and content:
             try:
                 inner = json.loads(content[0].get("text", ""))
-                return _extract_titles(inner)
+                return _extract_titles(inner, max_n=max_n)
             except Exception:
                 pass
         for key in ("results", "items", "articles"):
             items = search_payload.get(key)
             if isinstance(items, list):
-                return [str(it.get("title", "")).strip() for it in items if isinstance(it, dict) and it.get("title")][:3]
+                return [str(it.get("title", "")).strip() for it in items if isinstance(it, dict) and it.get("title")][:max_n]
     if isinstance(search_payload, list):
-        return [str(it.get("title", "")).strip() for it in search_payload if isinstance(it, dict) and it.get("title")][:3]
+        return [str(it.get("title", "")).strip() for it in search_payload if isinstance(it, dict) and it.get("title")][:max_n]
     return []
 
 

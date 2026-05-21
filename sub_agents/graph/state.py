@@ -61,7 +61,16 @@ class AlyxState(TypedDict):
     _pollinations: dict[str, Any]
 
     # Contexte d'autorisation OpenWebUI injecté par la pipeline pour isoler le RAG
-    # multi-tenant Qdrant. Clés : user_id (str), knowledge_ids (list[str]),
-    # file_ids (list[str]). Source de vérité : le body de la requête OpenWebUI →
-    # le serveur a déjà validé l'accès de l'utilisateur·rice à ces ressources.
+    # multi-tenant Qdrant. Clés : user_id (str), chat_id (str), knowledge_ids
+    # (list[str]), file_ids (list[str]). Source de vérité : le body de la requête
+    # OpenWebUI → le serveur a déjà validé l'accès de l'utilisateur·rice à ces
+    # ressources.
     _owui: dict[str, Any]
+
+    # Limites de sources + feature toggles, dérivés des Valves OpenWebUI et
+    # injectés par alyx_pipeline.pipe(). Les agents lisent ce dict pour piloter
+    # leurs paramètres MCP/HTTP plutôt que d'avoir des constantes en dur.
+    # Clés : web_ddg_max, web_fetch, wikipedia_articles, doc_papers, doc_scihub,
+    # rag_top_k, geo_limit, reasoning_steps, enable_scihub,
+    # enable_playwright_fallback, enable_writer_conversion, truncate_chars.
+    _sources: dict[str, Any]

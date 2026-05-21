@@ -86,6 +86,10 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     _completion_tokens = 0
     context_parts: list[str] = []
 
+    # Nombre max d'étapes piloté par la valve sources_reasoning_steps
+    limits = state.get("_sources") or {}
+    max_steps = int(limits.get("reasoning_steps", 5))
+
     # 0. Skills méthodologiques (SWOT, RACI, Eisenhower, pre-mortem…)
     skill_hits = find_relevant_skills(user_text, agent="reasoning")
     if skill_hits:
@@ -111,7 +115,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         match = re.search(r"\[.*?\]", raw, re.DOTALL)
         if match:
             steps = json.loads(match.group(0))
-            steps = [s for s in steps if isinstance(s, str)][:5]
+            steps = [s for s in steps if isinstance(s, str)][:max_steps]
     except Exception:
         steps = [user_text]
 

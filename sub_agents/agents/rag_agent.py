@@ -68,13 +68,17 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             "(menu '+' → Knowledge) dans OpenWebUI puis relance la question."
         )}}
 
+    # top_k piloté par la valve sources_rag_top_k
+    limits = state.get("_sources") or {}
+    top_k = int(limits.get("rag_top_k", 5))
+
     rag_context = ""
     try:
         await _emit("📚 Recherche dans les documents importés…")
         results = await search(
             query_text=user_text,
             collection=_QDRANT_COLLECTION,
-            top_k=5,
+            top_k=top_k,
             tenant_ids=knowledge_ids,
         )
         if results:

@@ -56,16 +56,17 @@ Retourne UNIQUEMENT les mots-clés séparés par des espaces, sans explication.
 """
 
 
-async def _fetch_url_with_fallback(url: str) -> str:
-    """Tente fetch-web (MCPO) puis playwright en fallback."""
+async def _fetch_url_with_fallback(url: str, max_chars: int, enable_playwright: bool) -> str:
+    """Tente fetch-web (MCPO) puis playwright en fallback (si activé)."""
     try:
-        result = await call_tool("fetch-web", "fetch", {"url": url, "max_length": 4000})
+        result = await call_tool("fetch-web", "fetch", {"url": url, "max_length": max_chars})
         content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
         if content and content.strip() and content.strip() != "{}":
-            return content[:4000]
+            return content[:max_chars]
         raise ValueError("empty fetch-web response")
     except Exception:
-        # Fallback playwright
+        if not enable_playwright:
+            return "(playwright fallback disabled by valve)"
         try:
             return await playwright_fetch(url)
         except Exception as exc:
@@ -105,11 +106,18 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
 
     context_parts: list[str] = []
 
+    # Limites pilotées par les valves OpenWebUI (cf. alyx_pipeline.Valves)
+    limits = state.get("_sources") or {}
+    ddg_max          = int(limits.get("web_ddg_max", 5))
+    fetch_count      = int(limits.get("web_fetch", 3))
+    truncate_chars   = int(limits.get("truncate_chars", 4000))
+    enable_playwright = bool(limits.get("enable_playwright_fallback", True))
+
     # Cas URL explicite dans la question
     explicit_url = _extract_url(user_text)
     if explicit_url:
         await _emit(f"🌐 Lecture de {explicit_url[:100]}")
-        content = await _fetch_url_with_fallback(explicit_url)
+        content = await _fetch_url_with_fallback(explicit_url, truncate_chars, enable_playwright)
         context_parts.append(
             f"## Contenu de {explicit_url}\n"
             f"<untrusted_content source=\"{explicit_url}\">\n{content}\n</untrusted_content>"
@@ -120,7 +128,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             await _emit(f"🔎 Recherche web : {keywords}")
             ddg_result = await call_tool("duckduckgo", "search", {
                 "query": keywords,
-                "max_results": 5,
+                "max_results": ddg_max,
             })
             ddg_raw = json.dumps(ddg_result, ensure_ascii=False, indent=2)
             context_parts.append(
@@ -128,12 +136,12 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
                 f"<untrusted_content source=\"duckduckgo:{keywords!r}\">\n{ddg_raw[:3000]}\n</untrusted_content>"
             )
 
-            # 3. Visiter les 3 premières URLs EN PARALLÈLE
-            urls = _extract_urls_from_ddg(ddg_result)[:3]
+            # 3. Visiter les N premières URLs EN PARALLÈLE (N = valve sources_web_fetch)
+            urls = _extract_urls_from_ddg(ddg_result)[:fetch_count]
             if urls:
                 await _emit(f"📄 Lecture parallèle de {len(urls)} source(s) web…")
                 fetched = await asyncio.gather(
-                    *(_fetch_url_with_fallback(u) for u in urls),
+                    *(_fetch_url_with_fallback(u, truncate_chars, enable_playwright) for u in urls),
                     return_exceptions=True,
                 )
                 for url, content in zip(urls, fetched):

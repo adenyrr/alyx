@@ -209,8 +209,17 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     prompt_tokens = _u.get("input_tokens", 0) or 0
     completion_tokens = _u.get("output_tokens", 0) or 0
 
-    # 4. Conversion finale si un format est demandé
-    fmt = _detect_format(user_text)
+    # 4. Conversion finale si un format est demandé ET si la valve l'autorise
+    limits = state.get("_sources") or {}
+    enable_conv = bool(limits.get("enable_writer_conversion", True))
+    requested_fmt = _detect_format(user_text)
+    if requested_fmt and not enable_conv:
+        markdown_output += (
+            f"\n\n---\n\n> ℹ️ Conversion vers {requested_fmt.upper()} désactivée par la valve "
+            "`enable_writer_conversion`. Le Markdown ci-dessus est utilisable manuellement avec "
+            f"`pandoc -f markdown -t {requested_fmt} -o output.{requested_fmt}`."
+        )
+    fmt = requested_fmt if enable_conv else None
     if fmt:
         try:
             await _emit(f"📦 Conversion → {fmt.upper()} via pandoc…")

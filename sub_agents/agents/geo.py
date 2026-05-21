@@ -78,10 +78,15 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     lat: float | None = None
     lon: float | None = None
 
+    # limite OSM pilotée par la valve sources_geo_limit (>1 = désambiguïsation
+    # entre "Paris, France" et "Paris, TX" par exemple)
+    limits = state.get("_sources") or {}
+    osm_limit = int(limits.get("geo_limit", 3))
+
     # 2. Géocodage OSM
     try:
         await _emit(f"🗺️ Géolocalisation : {location}")
-        osm_result = await call_tool("osm-mcp-server", "geocode", {"q": location, "limit": 1})
+        osm_result = await call_tool("osm-mcp-server", "geocode", {"q": location, "limit": osm_limit})
         osm_str = json.dumps(osm_result, ensure_ascii=False, indent=2)
         context_parts.append(f"## OSM geocoding ({location!r})\n{osm_str[:2000]}")
         # Extraire lat/lon depuis la réponse (structure variable selon impl.)
