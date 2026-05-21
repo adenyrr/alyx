@@ -22,6 +22,8 @@ from __future__ import annotations
 import base64
 import os
 import re
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
@@ -126,6 +128,19 @@ _FORMAT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # suggérant la commande pandoc manuellement (cf. pandoc-recipes skill).
 ]
 
+# Répertoire partagé entre mcpo (qui écrit via pandoc) et pipelines (qui relit).
+# Monté en RW via le volume Docker `mcp_exports`. Voir compose.yaml.
+_EXPORTS_DIR = Path(os.environ.get("WRITER_EXPORTS_DIR", "/data/exports"))
+
+_MIME_TYPES: dict[str, str] = {
+    "docx":  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "odt":   "application/vnd.oasis.opendocument.text",
+    "epub":  "application/epub+zip",
+    "latex": "application/x-tex",
+    "html":  "text/html",
+    "rtf":   "application/rtf",
+}
+
 
 def _detect_format(text: str) -> str | None:
     for fmt, pattern in _FORMAT_PATTERNS:
@@ -199,28 +214,28 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     if fmt:
         try:
             await _emit(f"📦 Conversion → {fmt.upper()} via pandoc…")
-            converted = await call_tool("pandoc", "convert-contents", {
-                "contents": markdown_output,
-                "input_format": "markdown",
-                "output_format": fmt,
-            })
-            artifact = _build_document_artifact(converted, fmt)
+            artifact = await _convert_via_pandoc(markdown_output, fmt)
             if artifact:
                 artifacts.append(artifact)
+                # Lien data-URI téléchargeable — fonctionne dans Markdown OpenWebUI.
+                filename = artifact["filename"]
+                mime = artifact["mime"]
+                data_uri = f"data:{mime};base64,{artifact['base64']}"
                 markdown_output += (
-                    f"\n\n---\n\n> 📎 Document converti au format **{fmt.upper()}** "
-                    f"(taille : {artifact.get('size_label', '?')})."
+                    f"\n\n---\n\n"
+                    f"📎 **[Télécharger {filename}]({data_uri})** "
+                    f"— {fmt.upper()}, {artifact['size_label']}"
                 )
             else:
                 markdown_output += (
-                    f"\n\n---\n\n> ⚠️ Conversion vers {fmt.upper()} retournée vide ou invalide. "
-                    f"Markdown ci-dessus utilisable directement, ou via "
+                    f"\n\n---\n\n> ⚠️ Conversion vers {fmt.upper()} retournée vide. "
+                    f"Markdown ci-dessus utilisable via "
                     f"`pandoc -f markdown -t {fmt} input.md -o output.{fmt}`."
                 )
         except Exception as exc:
             markdown_output += (
                 f"\n\n---\n\n> ⚠️ Conversion vers {fmt.upper()} échouée : {exc}\n"
-                f"> Le Markdown ci-dessus reste utilisable avec `pandoc -f markdown -t {fmt} -o out.{fmt}`."
+                f"> Markdown utilisable manuellement avec `pandoc -f markdown -t {fmt} -o out.{fmt}`."
             )
 
     return {
@@ -234,60 +249,49 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     }
 
 
-def _build_document_artifact(payload, fmt: str) -> dict | None:
+async def _convert_via_pandoc(markdown: str, fmt: str) -> dict | None:
     """
-    Pandoc MCP peut renvoyer soit du texte (formats textuels : tex/html/epub-xml),
-    soit du binaire encodé (docx/odt). On normalise en {type, format, content,
-    encoding, size_label}.
+    Convertit `markdown` via le MCP pandoc et renvoie un dict d'artifact prêt à
+    embarquer (base64 + filename + mime), ou None si la sortie est vide.
+
+    mcp-pandoc EXIGE `output_file` pour les formats binaires (docx/odt/epub/rtf).
+    On écrit dans /data/exports (volume partagé mcpo↔pipelines) puis on relit
+    le fichier pour le base64-encoder. Le fichier est supprimé après lecture.
     """
-    if payload is None:
+    _EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"writer-{uuid.uuid4().hex[:12]}.{fmt}"
+    output_path = _EXPORTS_DIR / filename
+
+    payload: dict[str, str] = {
+        "contents": markdown,
+        "input_format": "markdown",
+        "output_format": fmt,
+    }
+    # Pour les formats binaires, output_file est requis. Pour les textuels on
+    # le fournit aussi : simplifie la branche, évite de parser la réponse MCP.
+    payload["output_file"] = str(output_path)
+
+    await call_tool("pandoc", "convert-contents", payload)
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
         return None
 
-    # Aplatir si MCP renvoie un wrapper {"content": [{"type": "text", "text": "..."}]}
-    text_payload: str | None = None
-    if isinstance(payload, dict):
-        content = payload.get("content")
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict) and isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-            if parts:
-                text_payload = "\n".join(parts)
-        elif isinstance(content, str):
-            text_payload = content
-        if text_payload is None:
-            for key in ("result", "data", "output"):
-                value = payload.get(key)
-                if isinstance(value, str):
-                    text_payload = value
-                    break
-    elif isinstance(payload, str):
-        text_payload = payload
-
-    if not text_payload:
-        return None
-
-    # Heuristique : si la chaîne décode en base64 valide ET le format est binaire,
-    # on assume binaire. Sinon texte brut.
-    is_binary_format = fmt in {"docx", "odt", "rtf"}
-    encoding = "text"
-    raw_bytes: bytes | None = None
-    if is_binary_format:
+    try:
+        raw_bytes = output_path.read_bytes()
+    finally:
+        # Nettoyage immédiat : le fichier est entièrement dans l'artifact.
         try:
-            raw_bytes = base64.b64decode(text_payload, validate=True)
-            encoding = "base64"
-        except Exception:
-            raw_bytes = None
-            encoding = "text"
+            output_path.unlink()
+        except OSError:
+            pass
 
-    size_bytes = len(raw_bytes) if raw_bytes is not None else len(text_payload.encode("utf-8"))
     return {
         "type": "document",
         "format": fmt,
-        "encoding": encoding,
-        "content": text_payload,
-        "size_label": _human_size(size_bytes),
+        "filename": filename,
+        "mime": _MIME_TYPES.get(fmt, "application/octet-stream"),
+        "base64": base64.b64encode(raw_bytes).decode("ascii"),
+        "size_label": _human_size(len(raw_bytes)),
     }
 
 
