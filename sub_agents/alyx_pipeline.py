@@ -154,13 +154,14 @@ au format demandé (DOCX/EPUB/TEX/HTML/RTF/ODT).
 
 Règles strictes de pass-through :
   - Si un agent a fourni un bloc de code, REPRODUIS-LE INTÉGRALEMENT.
-  - Si l'agent writer a fourni un document, REPRODUIS-LE INTÉGRALEMENT, y compris
-    le lien data-URI de téléchargement final (`📎 [Télécharger …](data:…)`). Ne paraphrase
-    PAS la structure, ne réécris PAS les sections, ne supprime PAS le lien de téléchargement.
+  - Si l'agent writer a fourni un document, REPRODUIS son contenu structuré
+    (titres, sections, tableaux). Conserve sa note finale du type « 📎 Document
+    xxx.docx généré … lien de téléchargement ci-dessous » : le lien réel est ajouté
+    AUTOMATIQUEMENT par le système après ta réponse. Tu n'as RIEN à faire pour le lien.
   - Si une image a été générée (lien markdown ![...](url)), inclus le lien tel quel.
   - Si un agent a fourni des données factuelles (résumés doc, web, wikipedia…), tu peux
-    les synthétiser librement — sauf si ton message l'utilisateur·rice te demandait un
-    DOCUMENT (rapport/lettre/email/CV/…), auquel cas privilégie la sortie writer.
+    les synthétiser librement — sauf si l'utilisateur·rice demandait un DOCUMENT
+    (rapport/lettre/email/CV/…), auquel cas restitue la sortie writer.
 
 INTERDICTION ABSOLUE de générer ces phrases (ou leurs paraphrases) :
   ✗ "Je ne peux pas générer directement un fichier DOCX/PDF/EPUB/..."
@@ -168,12 +169,20 @@ INTERDICTION ABSOLUE de générer ces phrases (ou leurs paraphrases) :
   ✗ "Voici un modèle/du texte que tu pourras copier dans Word..."
   ✗ "Utilise un convertisseur en ligne / Pandoc pour transformer..."
   ✗ "Je t'envoie le texte brut optimisé pour Word"
-La conversion vers DOCX/EPUB/TEX/ODT/RTF/HTML est gérée par l'agent WRITER en aval
-via le serveur pandoc. Si writer a tourné, son output contient déjà le fichier embarqué
-en data-URI — il suffit de le restituer tel quel. Si writer n'a pas tourné mais qu'un
-format est demandé, indique-le calmement à l'utilisateur·rice ("le format demandé n'a
-pas été produit, je peux relancer la requête en passant par l'agent rédaction") au lieu
-de t'auto-saboter en refusant.
+
+INTERDICTION ABSOLUE de FABRIQUER un lien `data:` (data-URI) :
+  ✗ Ne JAMAIS inventer une chaîne base64 ni écrire `data:...;base64,...` toi-même.
+  ✗ Le lien de téléchargement réel est généré par le SYSTÈME à partir du fichier
+    produit par l'agent writer, et ajouté après ta réponse. Tu ne dois jamais
+    produire de data-URI : ce serait un faux fichier corrompu.
+  ✗ Si l'utilisateur·rice a demandé un fichier mais qu'aucun document n'a été produit
+    (writer non déclenché), indique honnêtement : « Le format demandé n'a pas été
+    produit cette fois — relance en précisant explicitement le format (.docx, .epub,
+    .tex…) pour activer l'agent rédaction. »
+
+La conversion vers DOCX/EPUB/TEX/ODT/RTF/HTML est gérée EXCLUSIVEMENT par l'agent WRITER
+en aval via le serveur pandoc, et le lien est injecté par le système. PDF n'est pas géré
+(LaTeX non installé) — si demandé, suggère un autre format.
 
 ═════════════ VISION ═════════════
 Tu as des capacités natives de vision. Si des images t'ont été transmises,
@@ -797,6 +806,15 @@ class Pipeline:
             ):
                 q.put(token)
             await _emit_model_reasoning(final=True)
+
+            # Liens de téléchargement des documents (agent writer) — émis
+            # DIRECTEMENT depuis les artifacts, JAMAIS via le LLM de synthèse :
+            # le base64 ne doit pas transiter par le modèle (reproduction
+            # corrompue/tronquée d'un long base64).
+            doc_links = _build_document_links(artifacts)
+            if doc_links:
+                q.put(doc_links)
+
             elapsed = time.perf_counter() - t0
             if synth_usage_out:
                 u = synth_usage_out[0]
@@ -1127,6 +1145,28 @@ def _strip_think_tags(text: str) -> str:
         text,
         flags=re.DOTALL | re.IGNORECASE,
     ).strip()
+
+
+def _build_document_links(artifacts: list[dict]) -> str:
+    """
+    Construit les liens de téléchargement data-URI pour les documents produits
+    par l'agent writer. Émis directement dans le flux (hors LLM) pour éviter
+    toute corruption du base64.
+    """
+    parts: list[str] = []
+    for a in artifacts:
+        if not isinstance(a, dict) or a.get("type") != "document":
+            continue
+        b64 = a.get("base64")
+        if not b64:
+            continue
+        mime = a.get("mime", "application/octet-stream")
+        filename = a.get("filename", "document")
+        fmt = str(a.get("format", "")).upper()
+        size = a.get("size_label", "")
+        data_uri = f"data:{mime};base64,{b64}"
+        parts.append(f"\n\n📎 **[Télécharger {filename}]({data_uri})** — {fmt}, {size}")
+    return "".join(parts)
 
 
 def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict]) -> str:
