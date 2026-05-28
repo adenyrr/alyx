@@ -923,14 +923,15 @@ class Pipeline:
             # DIRECTEMENT depuis les artifacts, JAMAIS via le LLM de synthèse :
             # le base64 ne doit pas transiter par le modèle (reproduction
             # corrompue/tronquée d'un long base64).
-            # Pièces jointes : upload natif Open WebUI si activé (valve), sinon
-            # fallback sur le lien data-URI historique. L'upload natif évite tout
-            # transit de base64 par le LLM et produit une vraie puce de fichier.
-            attached_natively = await _emit_writer_attachments(event_emitter, self.valves, artifacts)
-            if not attached_natively:
-                doc_links = _build_document_links(artifacts)
-                if doc_links:
-                    q.put(doc_links)
+            # Pièces jointes : on émet TOUJOURS le bloc data-URI (baseline fiable
+            # qui marche partout). L'upload natif Open WebUI, si activé, s'ajoute
+            # en bonus (puce de fichier dans la barre de message). Pas d'« exclusive
+            # or » : si le natif marche, l'utilisateur a chip + lien ; si le natif
+            # rate silencieusement, il a au moins le lien.
+            doc_links = _build_document_links(artifacts)
+            if doc_links:
+                q.put(doc_links)
+            await _emit_writer_attachments(event_emitter, self.valves, artifacts)
 
             elapsed = time.perf_counter() - t0
             if synth_usage_out:
@@ -1342,24 +1343,33 @@ def _strip_think_tags(text: str) -> str:
 
 def _build_document_links(artifacts: list[dict]) -> str:
     """
-    Construit les liens de téléchargement data-URI pour les documents produits
-    par l'agent writer. Émis directement dans le flux (hors LLM) pour éviter
-    toute corruption du base64.
+    Construit le bloc de téléchargement data-URI pour les documents produits par
+    l'agent writer. Émis directement dans le flux (hors LLM) pour éviter toute
+    corruption du base64.
+
+    Header dédié (`## 📎 Pièces jointes`) + séparateur visuel pour que le bloc soit
+    clairement détectable même après une longue prose de synthèse — évite la
+    confusion « est-ce que le lien est là ? » quand le LLM paraphrase la note du
+    writer sans inclure d'URL.
     """
-    parts: list[str] = []
+    rows: list[str] = []
     for a in artifacts:
         if not isinstance(a, dict) or a.get("type") != "document":
             continue
-        b64 = a.get("base64")
-        if not b64:
-            continue
-        mime = a.get("mime", "application/octet-stream")
         filename = a.get("filename", "document")
         fmt = str(a.get("format", "")).upper()
         size = a.get("size_label", "")
+        b64 = a.get("base64")
+        if not b64:
+            # Artifact incomplet : on signale plutôt que de rester silencieux.
+            rows.append(f"- ⚠️ **{filename}** ({fmt}) — base64 manquant, conversion probablement échouée")
+            continue
+        mime = a.get("mime", "application/octet-stream")
         data_uri = f"data:{mime};base64,{b64}"
-        parts.append(f"\n\n📎 **[Télécharger {filename}]({data_uri})** — {fmt}, {size}")
-    return "".join(parts)
+        rows.append(f"- 📎 **[{filename}]({data_uri})** — {fmt}, {size}")
+    if not rows:
+        return ""
+    return "\n\n---\n\n## 📎 Pièces jointes\n\n" + "\n".join(rows) + "\n"
 
 
 async def _upload_file_to_webui(webui_url: str, api_key: str, filename: str,
