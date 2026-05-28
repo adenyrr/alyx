@@ -1,8 +1,8 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.5.0
-requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, openai>=1.0, pydantic>=2.0
+version: 0.6.0
+requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, openai>=1.0, pydantic>=2.0
 """
 
 """
@@ -20,8 +20,10 @@ Flux d'un message :
 """
 
 import asyncio
+import base64
 import importlib
 import inspect
+import json
 import logging
 import os
 import queue
@@ -51,6 +53,9 @@ except ImportError:  # premier chargement, avant install des deps
 _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
 _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 _DB_URL = os.environ.get("DATABASE_URL", "")
+_WEBUI_URL = os.environ.get("WEBUI_URL", "http://open-webui:8080")
+_WEBUI_API_KEY = os.environ.get("WEBUI_API_KEY", "")
+_REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/2")
 
 # Icônes et libellés de statut par agent
 _AGENT_ICONS = {
@@ -66,6 +71,7 @@ _AGENT_ICONS = {
     "geo":       "🗺️ Géographie",
     "reasoning": "🧩 Raisonnement",
     "writer":    "✍️ Rédaction",
+    "presenter": "🎞️ Présentation",
 }
 
 # Noms courts des modèles pour la signature
@@ -91,6 +97,7 @@ _AGENT_SHORT_NAMES: dict[str, str] = {
     "geo":        "Géographie",
     "reasoning":  "Raisonnement",
     "writer":     "Rédaction",
+    "presenter":  "Présentation",
 }
 
 # Prix modèles en $/1M tokens {input, output}
@@ -121,6 +128,7 @@ _AGENT_MODULES: dict[str, str] = {
     "rag":       "agents.rag_agent",
     "reasoning": "agents.reasoning",
     "writer":    "agents.writer",
+    "presenter": "agents.presenter",
 }
 
 _ALYX_SYSTEM_TEMPLATE = """\
@@ -277,6 +285,33 @@ def _extract_owui_context(body: dict) -> dict[str, Any]:
     }
 
 
+def _coalesce(override, default):
+    """Retourne `override` s'il est défini (non None et non chaîne vide), sinon `default`."""
+    if override is None:
+        return default
+    if isinstance(override, str) and override == "":
+        return default
+    return override
+
+
+def _extract_user_valves(body: dict) -> dict[str, Any]:
+    """Extrait les surcharges UserValves transmises par Open WebUI dans le body.
+
+    Open WebUI place les valves utilisateur dans body["user"]["valves"] (mode
+    natif). En mode Pipelines externe ce champ peut être absent → dict vide,
+    auquel cas les valves globales prévalent intégralement.
+    """
+    if not isinstance(body, dict):
+        return {}
+    user = body.get("user")
+    if not isinstance(user, dict):
+        return {}
+    valves = user.get("valves")
+    if not isinstance(valves, dict):
+        return {}
+    return valves
+
+
 def _extract_images_b64(messages: list[dict]) -> list[str]:
     """Extrait les images base64 du dernier message utilisateur."""
     images: list[str] = []
@@ -373,6 +408,7 @@ class Pipeline:
         show_perf_stats: bool = Field(default=False, description="Afficher les métriques de performance dans la signature (⏱ temps, tokens, coût estimé)")
         realtime_status: bool = Field(default=True, description="Émettre des statuts OpenWebUI en temps réel (quel agent travaille)")
         enable_memory_bg: bool = Field(default=True, description="Activer la condensation mémoire en arrière-plan")
+        embed_html_inline: bool = Field(default=True, description="Rendre les artifacts HTML de l'agent dev en iframe inline (event `embeds` OpenWebUI) au lieu de blocs de code markdown (panneau Artifacts)")
 
         # --- Superviseur ---
         supervisor_model: str = Field(default="openrouter/qwen3.5-flash", description="Modèle du superviseur (routage)")
@@ -389,6 +425,20 @@ class Pipeline:
         model_rag: str = Field(default="openrouter/gpt-oss", description="Modèle agent Documents (RAG Qdrant)")
         model_reasoning: str = Field(default="openrouter/deepseek", description="Modèle agent Raisonnement (sequential-thinking, analyses complexes)")
         model_writer: str = Field(default="openrouter/deepseek", description="Modèle agent Rédaction (documents longue forme, prose structurée)")
+        model_presenter: str = Field(default="openrouter/kimi-k2.5", description="Modèle agent Présentation (slides reveal.js)")
+
+        # --- Workflows multi-phases ---
+        max_phases: int = Field(default=2, ge=1, le=5, description="Nombre max de phases séquentielles (1 = parallèle seul, 2 = comportement actuel, >2 = replanification dynamique)")
+
+        # --- Cache Redis des sorties agents ---
+        enable_agent_cache: bool = Field(default=False, description="Mettre en cache (Redis) les sorties d'agents déterministes pour dédupliquer les requêtes répétées")
+        agent_cache_ttl: int = Field(default=3600, ge=60, le=86400, description="Durée de vie du cache agents en secondes")
+        redis_url: str = Field(default=_REDIS_URL, description="URL Redis pour le cache agents (DB séparée des autres services)")
+
+        # --- Pièces jointes natives (writer) ---
+        enable_native_file_attachments: bool = Field(default=False, description="Uploader les documents writer vers Open WebUI et les attacher en pièce jointe native (event `files`) au lieu d'un lien data-URI. Nécessite webui_url + webui_api_key")
+        webui_url: str = Field(default=_WEBUI_URL, description="URL interne d'Open WebUI (pour l'upload de fichiers natifs)")
+        webui_api_key: str = Field(default=_WEBUI_API_KEY, description="Clé API Open WebUI (Bearer) pour l'upload de fichiers natifs")
 
         # --- Limites de sources par agent (injectées via state._sources) ---
         sources_web_ddg_max:         int = Field(default=5, ge=1, le=10, description="Web — nombre max de résultats DuckDuckGo bruts")
@@ -415,6 +465,18 @@ class Pipeline:
         pollinations_width: int = Field(default=1024, ge=64, le=4096, description="Largeur de l'image générée (pixels)")
         pollinations_height: int = Field(default=1024, ge=64, le=4096, description="Hauteur de l'image générée (pixels)")
         pollinations_enhance: bool = Field(default=True, description="Amélioration IA du prompt par Pollinations avant génération")
+
+    class UserValves(BaseModel):
+        """Surcharges par utilisateur·rice (exposées dans Open WebUI en mode natif).
+
+        Chaque champ vide/None laisse la valve globale correspondante prévaloir.
+        Appliquées par requête (concurrence-safe : aucune mutation de self.valves).
+        """
+        language: str = Field(default="", description="Forcer la langue de réponse d'Alyx (vide = valeur globale)")
+        alyx_model: str = Field(default="", description="Forcer le modèle de synthèse d'Alyx (vide = valeur globale)")
+        show_model_footer: bool | None = Field(default=None, description="Afficher le pied de page modèles/coût (None = valeur globale)")
+        show_perf_stats: bool | None = Field(default=None, description="Afficher les métriques de performance (None = valeur globale)")
+        enable_scihub: bool | None = Field(default=None, description="Autoriser l'accès sci-hub pour mes requêtes (None = valeur globale)")
 
     def __init__(self):
         self.name = "Alyx"
@@ -479,6 +541,7 @@ class Pipeline:
             "rag":        self.valves.model_rag,
             "reasoning":  self.valves.model_reasoning,
             "writer":     self.valves.model_writer,
+            "presenter":  self.valves.model_presenter,
             # Paramètres Pollinations transmis aux agents via le dict models
             "_pollinations": {
                 "enable":  self.valves.enable_image_gen,
@@ -531,6 +594,7 @@ class Pipeline:
         # 1. Préparer l'état initial
         lc_messages = _convert_messages(messages)
         images_b64 = _extract_images_b64(messages)
+        user_valves = _extract_user_valves(body)
 
         # Date courante injectée dans l'état — lisible par tous les agents
         current_date = datetime.now().strftime("%A %d %B %Y").lower()
@@ -579,7 +643,7 @@ class Pipeline:
                 "rag_top_k":          self.valves.sources_rag_top_k,
                 "geo_limit":          self.valves.sources_geo_limit,
                 "reasoning_steps":    self.valves.sources_reasoning_steps,
-                "enable_scihub":              self.valves.enable_scihub,
+                "enable_scihub":              _coalesce(user_valves.get("enable_scihub"), self.valves.enable_scihub),
                 "enable_playwright_fallback": self.valves.enable_playwright_fallback,
                 "enable_writer_conversion":   self.valves.enable_writer_conversion,
                 "truncate_chars":     self.valves.truncate_external_content,
@@ -598,7 +662,7 @@ class Pipeline:
             self._run_and_synthesize_async(
                 q, graph, initial_state, config,
                 runtime_event_emitter, runtime_reasoning_stream_emitter, self._models,
-                messages, lc_messages, images_b64, user_message,
+                messages, lc_messages, images_b64, user_message, user_valves,
             ),
             self._loop,
         )
@@ -622,9 +686,17 @@ class Pipeline:
         lc_messages: list,
         images_b64: list[str],
         user_message: str,
+        user_valves: dict | None = None,
     ) -> None:
         """Coroutine unique : graphe → synthèse → tokens dans la queue."""
         from openai import AsyncOpenAI  # lazy
+
+        # Valeurs effectives = surcharges UserValves (par requête) sinon valves globales.
+        uv = user_valves or {}
+        eff_language = _coalesce(uv.get("language"), self.valves.language)
+        eff_alyx_model = _coalesce(uv.get("alyx_model"), self.valves.alyx_model)
+        eff_show_footer = _coalesce(uv.get("show_model_footer"), self.valves.show_model_footer)
+        eff_show_perf = _coalesce(uv.get("show_perf_stats"), self.valves.show_perf_stats)
 
         async def _emit(description: str, done: bool = False, hidden: bool = False) -> None:
             if event_emitter and self.valves.realtime_status:
@@ -657,14 +729,35 @@ class Pipeline:
         agent_metrics: dict[str, dict] = {}
         t0 = time.perf_counter()
         # Mistral ne supporte pas le paramètre enable_thinking
-        is_mistral = "mistral" in self.valves.alyx_model.lower()
+        is_mistral = "mistral" in eff_alyx_model.lower()
         extra_body: dict = {} if (model_reasoning_enabled or is_mistral) else {"enable_thinking": False}
         try:
-            await _emit("🧭 Routage de la demande…")
-            # Exécuter le graphe
-            agent_outputs, artifacts, agent_metrics = await self._run_graph(
-                graph, initial_state, config, event_emitter, models=models
-            )
+            # ── Cache Redis : court-circuite le graphe pour les requêtes
+            # déterministes déjà vues (agents non temps-réel, sans artifact). ──
+            cache_hit = False
+            cache_key = None
+            if self.valves.enable_agent_cache:
+                from tools import cache as _agent_cache
+                cache_key = _agent_cache.cache_key(user_message)
+                cached = await _agent_cache.get(self.valves.redis_url, cache_key)
+                if cached:
+                    await _emit("⚡ Réponse depuis le cache")
+                    agent_outputs, artifacts, agent_metrics = cached, [], {}
+                    cache_hit = True
+
+            if not cache_hit:
+                await _emit("🧭 Routage de la demande…")
+                # Exécuter le graphe
+                agent_outputs, artifacts, agent_metrics = await self._run_graph(
+                    graph, initial_state, config, event_emitter, models=models,
+                    max_phases=self.valves.max_phases,
+                )
+                # Mémoriser si le tour est sûr à cacher (déterministe, sans artifact/erreur)
+                if (self.valves.enable_agent_cache and cache_key
+                        and _agent_cache.is_cacheable(agent_outputs, artifacts)):
+                    await _agent_cache.store(
+                        self.valves.redis_url, cache_key, agent_outputs, self.valves.agent_cache_ttl
+                    )
             if reasoning_emitter and self.valves.show_reasoning:
                 await reasoning_emitter("", True)
 
@@ -676,24 +769,24 @@ class Pipeline:
                 and not agent_outputs.get("image_gen", "").startswith("⚠️")
             ):
                 if event_emitter and len(messages) <= 2:
-                    asyncio.ensure_future(_emit_chat_title(event_emitter, user_message))
+                    asyncio.ensure_future(_emit_chat_meta(event_emitter, user_message))
                 q.put(agent_outputs["image_gen"])
                 elapsed = time.perf_counter() - t0
                 await _emit("✅ Terminé", done=True)
-                if self.valves.show_model_footer:
-                    q.put(f"\n\n---\n*{_build_footer(self.valves.alyx_model, agent_outputs, models, agent_metrics, elapsed, self.valves.show_perf_stats)}*")
+                if eff_show_footer:
+                    q.put(f"\n\n---\n*{_build_footer(eff_alyx_model, agent_outputs, models, agent_metrics, elapsed, eff_show_perf)}*")
                 return
 
             # Court-circuit : aucun agent invoqué → Alyx répond directement
             if not agent_outputs and not artifacts:
                 # Titre automatique du chat à la première réponse
                 if event_emitter and len(messages) <= 2:
-                    asyncio.ensure_future(_emit_chat_title(event_emitter, user_message))
+                    asyncio.ensure_future(_emit_chat_meta(event_emitter, user_message))
                 await _emit("✍️ Réponse directe…")
                 alyx_system = _ALYX_SYSTEM_TEMPLATE.format(
                     current_date=datetime.now().strftime("%A %d %B %Y"),
-                    language=self.valves.language,
-                    alyx_model=self.valves.alyx_model,
+                    language=eff_language,
+                    alyx_model=eff_alyx_model,
                 )
                 direct_messages = [{"role": "system", "content": alyx_system}]
                 for m in messages[-self.valves.history_messages:]:
@@ -710,7 +803,7 @@ class Pipeline:
                 client = AsyncOpenAI(base_url=self.valves.litellm_url, api_key=self.valves.litellm_api_key)
                 direct_usage_out: list = []
                 stream = await client.chat.completions.create(
-                    model=self.valves.alyx_model,
+                    model=eff_alyx_model,
                     messages=direct_messages,
                     temperature=self.valves.alyx_temperature,
                     stream=True,
@@ -731,17 +824,17 @@ class Pipeline:
                     agent_metrics["_synthesis"] = {
                         "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
                         "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
-                        "model": self.valves.alyx_model,
+                        "model": eff_alyx_model,
                     }
                 await _emit("✅ Terminé", done=True)
-                if self.valves.show_model_footer:
+                if eff_show_footer:
                     footer = _build_footer(
-                        alyx_model=self.valves.alyx_model,
+                        alyx_model=eff_alyx_model,
                         agent_outputs={},
                         models=models,
                         agent_metrics=agent_metrics,
                         elapsed=elapsed,
-                        show_perf_stats=self.valves.show_perf_stats,
+                        show_perf_stats=eff_show_perf,
                     )
                     q.put(f"\n\n---\n*{footer}*")
                 return
@@ -761,14 +854,30 @@ class Pipeline:
 
             # Titre automatique du chat à la première réponse (avec agents)
             if event_emitter and len(messages) <= 2:
-                asyncio.ensure_future(_emit_chat_title(event_emitter, user_message))
+                asyncio.ensure_future(_emit_chat_meta(event_emitter, user_message))
+
+            # Artifacts HTML inline : extraire les blocs ```html de l'agent dev et
+            # les rendre en iframe directement dans la conversation (event `embeds`),
+            # au lieu de les laisser passer en bloc de code markdown (panneau Artifacts).
+            # La sortie dev est nettoyée pour que la synthèse explique l'artifact sans
+            # reproduire le code (évite le doublon inline + panneau).
+            if self.valves.embed_html_inline:
+                all_embeds: list[str] = []
+                for _html_agent in ("dev", "presenter"):
+                    if agent_outputs.get(_html_agent):
+                        embeds_found, cleaned = _extract_html_embeds(agent_outputs[_html_agent])
+                        if embeds_found:
+                            agent_outputs[_html_agent] = cleaned
+                            all_embeds.extend(embeds_found)
+                if all_embeds:
+                    await _emit_html_embeds(event_emitter, all_embeds)
 
             await _emit("✍️ Rédaction de la réponse…")
             synthesis_context = _build_synthesis_context(agent_outputs, artifacts)
             synth_messages = [{"role": "system", "content": _ALYX_SYSTEM_TEMPLATE.format(
                 current_date=datetime.now().strftime("%A %d %B %Y"),
-                language=self.valves.language,
-                alyx_model=self.valves.alyx_model,
+                language=eff_language,
+                alyx_model=eff_alyx_model,
             )}]
             for m in messages[-self.valves.history_messages:]:
                 r = m.get("role", "user")
@@ -791,7 +900,7 @@ class Pipeline:
             client = AsyncOpenAI(base_url=self.valves.litellm_url, api_key=self.valves.litellm_api_key)
             synth_usage_out: list = []
             stream = await client.chat.completions.create(
-                model=self.valves.alyx_model,
+                model=eff_alyx_model,
                 messages=synth_messages,
                 temperature=self.valves.alyx_temperature,
                 stream=True,
@@ -811,9 +920,14 @@ class Pipeline:
             # DIRECTEMENT depuis les artifacts, JAMAIS via le LLM de synthèse :
             # le base64 ne doit pas transiter par le modèle (reproduction
             # corrompue/tronquée d'un long base64).
-            doc_links = _build_document_links(artifacts)
-            if doc_links:
-                q.put(doc_links)
+            # Pièces jointes : upload natif Open WebUI si activé (valve), sinon
+            # fallback sur le lien data-URI historique. L'upload natif évite tout
+            # transit de base64 par le LLM et produit une vraie puce de fichier.
+            attached_natively = await _emit_writer_attachments(event_emitter, self.valves, artifacts)
+            if not attached_natively:
+                doc_links = _build_document_links(artifacts)
+                if doc_links:
+                    q.put(doc_links)
 
             elapsed = time.perf_counter() - t0
             if synth_usage_out:
@@ -821,19 +935,19 @@ class Pipeline:
                 agent_metrics["_synthesis"] = {
                     "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
                     "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
-                    "model": self.valves.alyx_model,
+                    "model": eff_alyx_model,
                 }
             await _emit("✅ Terminé", done=True)
 
             # Pied de page
-            if self.valves.show_model_footer:
+            if eff_show_footer:
                 footer = _build_footer(
-                    alyx_model=self.valves.alyx_model,
+                    alyx_model=eff_alyx_model,
                     agent_outputs=agent_outputs,
                     models=models,
                     agent_metrics=agent_metrics,
                     elapsed=elapsed,
-                    show_perf_stats=self.valves.show_perf_stats,
+                    show_perf_stats=eff_show_perf,
                 )
                 q.put(f"\n\n---\n*{footer}*")
 
@@ -1021,7 +1135,8 @@ class Pipeline:
             await reasoning_handler("", True)
 
     @staticmethod
-    async def _run_graph(graph, initial_state: dict, config: dict, event_emitter=None, models: dict | None = None):
+    async def _run_graph(graph, initial_state: dict, config: dict, event_emitter=None,
+                         models: dict | None = None, max_phases: int = 2):
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
         agent_metrics: dict[str, dict] = {}
@@ -1068,40 +1183,55 @@ class Pipeline:
                     continue
                 await _handle_agent_output(node_name, node_output)
 
-        # ── Phase 2 : workflow séquentiel (si routing_next défini) ─────────────
-        # Les agents phase 2 reçoivent agent_outputs de la phase 1 dans leur état.
-        valid_next = [n for n in routing_next if n in _AGENT_MODULES]
-        if valid_next:
-            labels2 = "  ·  ".join(_AGENT_ICONS.get(n, n) for n in valid_next)
-            await _emit(f"Phase 2 · Transmission du contexte à {labels2}")
-            pending = set(valid_next)
-
-            # Construire l'état phase 2 avec le contexte phase 1 inclus
-            phase2_state = {
+        # ── Phases séquentielles 2..max_phases ─────────────────────────────────
+        # Chaque phase reçoit agent_outputs/artifacts des phases précédentes.
+        # max_phases=2 ⇒ on exécute uniquement routing_next (comportement historique,
+        # aucune replanification). max_phases>2 ⇒ après chaque phase, le superviseur
+        # est resollicité pour décider d'une phase suivante (replanification dynamique).
+        async def _run_phase(phase_idx: int, agents_to_run: list[str]) -> None:
+            nonlocal pending
+            labels = "  ·  ".join(_AGENT_ICONS.get(n, n) for n in agents_to_run)
+            await _emit(f"Phase {phase_idx} · {labels}")
+            pending = set(agents_to_run)
+            phase_state = {
                 **initial_state,
                 "agent_outputs": dict(agent_outputs),
                 "artifacts": list(artifacts),
-                "routing": valid_next,
+                "routing": agents_to_run,
                 "routing_next": [],
                 "routing_phase1": [],
             }
-
             coros = []
-            for name in valid_next:
+            for name in agents_to_run:
                 mod = importlib.import_module(_AGENT_MODULES[name])
                 has_config = "config" in inspect.signature(mod.run).parameters
                 m = (models or {}).get(name)
                 if has_config:
-                    coros.append((name, mod.run(phase2_state, config=config, model=m)))
+                    coros.append((name, mod.run(phase_state, config=config, model=m)))
                 else:
-                    coros.append((name, mod.run(phase2_state, model=m)))
-
+                    coros.append((name, mod.run(phase_state, model=m)))
             results = await asyncio.gather(*[c for _, c in coros], return_exceptions=True)
             for (name, _), result in zip(coros, results):
                 if isinstance(result, dict):
                     await _handle_agent_output(name, result)
                 else:
-                    agent_outputs[name] = f"⚠️ [Erreur phase 2] {result}"
+                    agent_outputs[name] = f"⚠️ [Erreur phase {phase_idx}] {result}"
+
+        already_run: set[str] = set(agent_outputs.keys())
+        current_next = [n for n in routing_next if n in _AGENT_MODULES and n not in already_run]
+        phase_idx = 2
+        while current_next and phase_idx <= max_phases:
+            await _run_phase(phase_idx, current_next)
+            already_run.update(current_next)
+            if phase_idx < max_phases:
+                user_text = _last_human_text(initial_state.get("messages", []))
+                replanned = await _replan_next(
+                    user_text, agent_outputs, (models or {}).get("supervisor"), already_run
+                )
+                current_next = [n for n in replanned if n in _AGENT_MODULES and n not in already_run][:2]
+            else:
+                current_next = []
+            phase_idx += 1
 
         return agent_outputs, artifacts, agent_metrics
 
@@ -1124,6 +1254,66 @@ async def _emit_status(event_emitter, description: str, done: bool = False, hidd
 
 async def _emit_notification(event_emitter, level: str, content: str) -> None:
     await _emit_event(event_emitter, "notification", {"type": level, "content": content})
+
+
+def _last_human_text(messages: list) -> str:
+    """Dernier message humain d'une liste de BaseMessage LangChain."""
+    for msg in reversed(messages or []):
+        if getattr(msg, "type", None) == "human":
+            content = getattr(msg, "content", "")
+            return content if isinstance(content, str) else ""
+    return ""
+
+
+async def _replan_next(user_text: str, agent_outputs: dict, model: str | None,
+                       already_run: set[str]) -> list[str]:
+    """Replanification dynamique : sollicite le superviseur pour décider d'une phase
+    supplémentaire au vu des résultats déjà obtenus. Retourne une liste d'agents
+    (max 2) ou [] si la réponse est jugée complète. Conservateur par défaut.
+    """
+    from openai import AsyncOpenAI
+    available = sorted(set(_AGENT_MODULES) - set(already_run))
+    if not available:
+        return []
+    summary = "\n".join(
+        f"- {k}: {str(v)[:300]}"
+        for k, v in agent_outputs.items()
+        if v and not str(v).startswith(("⚠️", "⏱️"))
+    )[:3000]
+    sys = (
+        "You orchestrate a sequential multi-agent system. Given the user's request and the "
+        "results gathered so far, decide whether ANOTHER phase of agents is needed to fully "
+        "satisfy the request (e.g. transform gathered data into an artifact, write a document, "
+        "or fetch a clearly missing piece).\n"
+        f"Agents still available: {available}.\n"
+        "Return ONLY a JSON array of agent names for the NEXT phase, or [] if the answer is "
+        "already complete. Be conservative: prefer [] unless a clearly missing step remains. "
+        "Max 2 agents."
+    )
+    try:
+        client = AsyncOpenAI(
+            base_url=os.environ.get("LITELLM_URL", "http://litellm:4000/v1"),
+            api_key=os.environ.get("LITELLM_API_KEY", ""),
+        )
+        resp = await client.chat.completions.create(
+            model=model or "openrouter/qwen3.5-flash",
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": f"Request: {user_text[:500]}\n\nResults so far:\n{summary}"},
+            ],
+            max_tokens=40,
+            temperature=0,
+            stream=False,
+            extra_body={"enable_thinking": False},
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if not match:
+            return []
+        agents = json.loads(match.group(0))
+        return [a for a in agents if isinstance(a, str) and a in available][:2]
+    except Exception:
+        return []
 
 
 def _compact_reasoning_text(text: str, max_len: int = 280) -> str:
@@ -1167,6 +1357,123 @@ def _build_document_links(artifacts: list[dict]) -> str:
         data_uri = f"data:{mime};base64,{b64}"
         parts.append(f"\n\n📎 **[Télécharger {filename}]({data_uri})** — {fmt}, {size}")
     return "".join(parts)
+
+
+async def _upload_file_to_webui(webui_url: str, api_key: str, filename: str,
+                                raw_bytes: bytes, mime: str) -> dict | None:
+    """Upload un fichier vers Open WebUI (POST /api/v1/files/) et retourne l'objet
+    fichier renvoyé (avec son `id`), ou None en cas d'échec."""
+    import httpx
+    url = webui_url.rstrip("/") + "/api/v1/files/"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    files = {"file": (filename, raw_bytes, mime)}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(url, headers=headers, files=files)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _emit_writer_attachments(event_emitter, valves, artifacts: list[dict]) -> bool:
+    """Upload les documents writer vers Open WebUI et les attache en pièce jointe
+    native via l'event `files`.
+
+    Returns:
+        True si au moins un fichier a été attaché nativement (→ l'appelant NE doit
+        PAS émettre de lien data-URI), False sinon (→ fallback data-URI).
+    """
+    if not (event_emitter and getattr(valves, "enable_native_file_attachments", False)
+            and getattr(valves, "webui_api_key", "")):
+        return False
+
+    file_objs: list[dict] = []
+    for a in artifacts:
+        if not isinstance(a, dict) or a.get("type") != "document":
+            continue
+        b64 = a.get("base64")
+        if not b64:
+            continue
+        filename = a.get("filename", "document")
+        try:
+            raw = base64.b64decode(b64)
+            obj = await _upload_file_to_webui(
+                valves.webui_url, valves.webui_api_key, filename, raw,
+                a.get("mime", "application/octet-stream"),
+            )
+        except Exception as exc:
+            _LOGGER.warning("Upload natif du document %s échoué : %s", filename, exc)
+            continue
+        if not obj or not obj.get("id"):
+            continue
+        fid = obj["id"]
+        file_objs.append({
+            "type": "file",
+            "id": fid,
+            "name": filename,
+            "url": f"/api/v1/files/{fid}",
+            "file": obj,
+        })
+
+    if not file_objs:
+        return False
+    try:
+        await event_emitter({"type": "files", "data": {"files": file_objs}})
+        return True
+    except Exception as exc:
+        _LOGGER.warning("Émission de l'event files échouée : %s", exc)
+        return False
+
+
+_HTML_FENCE_RE = re.compile(r"```html[^\n]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_html_embeds(text: str) -> tuple[list[str], str]:
+    """
+    Extrait les blocs ```html d'une sortie d'agent pour les rendre en iframe
+    inline (event OpenWebUI `embeds`) plutôt qu'en bloc de code markdown
+    (panneau Artifacts).
+
+    Le bloc de code est retiré du texte et remplacé par un court placeholder
+    qui indique à la synthèse d'expliquer l'artifact SANS reproduire le code
+    (sinon il s'afficherait deux fois : inline + panneau Artifacts).
+
+    Returns:
+        (liste des contenus HTML extraits, texte nettoyé pour la synthèse)
+    """
+    embeds: list[str] = []
+
+    def _replace(match: "re.Match") -> str:
+        html = match.group(1).strip()
+        if not html:
+            return match.group(0)
+        embeds.append(html)
+        title_m = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+        label = title_m.group(1).strip() if title_m else "interactif"
+        return (
+            f"[Artifact HTML « {label} » affiché directement dans la conversation. "
+            "NE PAS reproduire le code : présente-le et commente-le en 2-3 phrases.]"
+        )
+
+    stripped = _HTML_FENCE_RE.sub(_replace, text)
+    return embeds, stripped
+
+
+async def _emit_html_embeds(event_emitter, embeds: list[str], replace: bool = False) -> None:
+    """Émet les artifacts HTML en iframes inline via l'event OpenWebUI `embeds`.
+
+    Args:
+        replace: si True, remplace les embeds précédents au lieu de les empiler.
+                 Utile pour un widget « vivant » mis à jour en place (polling,
+                 build progressif). Par défaut False → comportement additif.
+    """
+    if not event_emitter or not embeds:
+        return
+    try:
+        data: dict[str, Any] = {"embeds": embeds}
+        if replace:
+            data["replace"] = True
+        await event_emitter({"type": "embeds", "data": data})
+    except Exception:
+        pass
 
 
 def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict]) -> str:
@@ -1223,6 +1530,14 @@ def _extract_citations(agent_outputs: dict[str, str]) -> list[dict]:
     return results
 
 
+async def _emit_chat_meta(event_emitter, user_message: str) -> None:
+    """Émet en parallèle le titre et les tags du chat (premier tour uniquement)."""
+    await asyncio.gather(
+        _emit_chat_title(event_emitter, user_message),
+        _emit_chat_tags(event_emitter, user_message),
+    )
+
+
 async def _emit_chat_title(event_emitter, user_message: str) -> None:
     """Génère et émet un titre court pour le chat (premier tour uniquement)."""
     from openai import AsyncOpenAI
@@ -1246,6 +1561,43 @@ async def _emit_chat_title(event_emitter, user_message: str) -> None:
             await event_emitter({"type": "chat:title", "data": {"title": title}})
     except Exception:
         pass  # Non-bloquant — le titre n'est pas critique
+
+
+async def _emit_chat_tags(event_emitter, user_message: str) -> None:
+    """Génère et émet 2-4 tags thématiques pour le chat (premier tour uniquement).
+
+    Émis via l'event `chat:tags`. Non-bloquant : les tags ne sont pas critiques.
+    """
+    from openai import AsyncOpenAI
+    try:
+        client = AsyncOpenAI(
+            base_url=os.environ.get("LITELLM_URL", "http://litellm:4000/v1"),
+            api_key=os.environ.get("LITELLM_API_KEY", ""),
+        )
+        resp = await client.chat.completions.create(
+            model="openrouter/qwen3.5-flash",
+            messages=[
+                {"role": "system", "content": (
+                    "Generate 2 to 4 short topical tags categorizing this conversation. "
+                    "Lowercase, single or two words each, no '#'. "
+                    "Return ONLY a JSON array of strings, e.g. [\"finance\",\"bitcoin\"]."
+                )},
+                {"role": "user", "content": user_message[:400]},
+            ],
+            max_tokens=40,
+            stream=False,
+            extra_body={},
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if not match:
+            return
+        tags = json.loads(match.group(0))
+        tags = [str(t).strip().lstrip("#").lower()[:24] for t in tags if str(t).strip()][:4]
+        if tags:
+            await event_emitter({"type": "chat:tags", "data": {"tags": tags}})
+    except Exception:
+        pass  # Non-bloquant — les tags ne sont pas critiques
 
 
 def _estimate_cost(agent_metrics: dict[str, dict]) -> float:

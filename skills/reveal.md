@@ -1,7 +1,7 @@
 ---
 name: reveal-slides
 description: Create interactive HTML presentation slides using Reveal.js, delivered as self-contained HTML artifacts. Use this skill whenever someone needs a slideshow, pitch deck, lecture slides, or any multi-slide presentation with transitions, fragments, code highlighting, speaker notes, or markdown-driven content. Trigger on requests like "make a presentation", "create slides about X", "build a pitch deck", "design lecture slides", or any prompt needing a slide deck. Do NOT use for scrollytelling (→ gsap-animation skill), data dashboards (→ chartjs/recharts skill), or static single-page infographics (→ creative skill).
-agents: [dev]
+agents: [dev, presenter]
 ---
 
 # Reveal.js Slides Skill

@@ -122,6 +122,12 @@ services:
       QDRANT_COLLECTION: "${QDRANT_COLLECTION:-open-webui_knowledge}"
       # PostgreSQL — base dédiée LangGraph
       DATABASE_URL: "postgresql://${PG_USER:-openwebui}:${PG_PASS}@postgres:5432/langgraph"
+      # Cache Redis des sorties agents (DB 2 — séparée d'OpenWebUI=0 et LiteLLM=1)
+      REDIS_URL: "redis://redis:6379/2"
+      # Open WebUI — upload de pièces jointes natives (agent writer). Le token est
+      # optionnel : sans lui, le pipeline retombe sur les liens data-URI.
+      WEBUI_URL: "http://open-webui:8080"
+      WEBUI_API_KEY: "${WEBUI_API_KEY:-}"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9099/ || exit 1"]
       interval: 15s
@@ -130,6 +136,8 @@ services:
       start_period: 60s
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       litellm:
         condition: service_healthy

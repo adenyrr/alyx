@@ -35,7 +35,7 @@ _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 
 _VALID_AGENTS = {
     "wikipedia", "web", "doc", "dev", "media",
-    "data", "geo", "memory", "image_gen", "rag", "reasoning", "writer",
+    "data", "geo", "memory", "image_gen", "rag", "reasoning", "writer", "presenter",
 }
 
 _SYSTEM = """\
@@ -67,6 +67,11 @@ Given the user's last message, output ONLY a JSON array of agent names to invoke
                   Use writer when the user asks to "rédige", "compose", "write a report/letter/email",
                   "draft a document", "prepare a memo", or mentions a specific document type.
                   NOT for short conversational replies (Alyx handles those), NOT for code (use dev).
+  "presenter" → SLIDE DECKS / PRESENTATIONS as reveal.js HTML: pitch decks, lecture
+                  slides, slideshows, "présentation", "diaporama", "slides", "pitch deck".
+                  Produces a self-contained reveal.js artifact. Use presenter (not dev) whenever
+                  the deliverable is a multi-slide presentation. NOT for single charts/dashboards
+                  (use dev), NOT for long-form prose documents (use writer).
 
 ═══════════════════════════════════════════════════════
  ROUTING RULES
@@ -208,6 +213,11 @@ RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "SWOT du marché du SaaS B2B puis transforme-le en mémo stratégique" → {"routing": ["reasoning"], "routing_next": ["writer"]}
   "Récupère les chiffres de vente Tesla 2024 et fais un rapport investisseur" → {"routing": ["data"], "routing_next": ["writer"]}
   "Press release sur la nouvelle réglementation européenne sur l'IA" → {"routing": ["web", "wikipedia"], "routing_next": ["writer"]}
+  "Crée une présentation sur l'histoire de Rome" → ["presenter"]
+  "Fais-moi un pitch deck pour ma startup SaaS" → ["presenter"]
+  "Prépare un diaporama de cours sur la photosynthèse" → ["presenter"]
+  "Recherche les chiffres du marché EV 2024 et fais-en une présentation" → {"routing": ["web", "wikipedia"], "routing_next": ["presenter"]}
+  "Récupère les ventes Tesla et présente-les en slides" → {"routing": ["data"], "routing_next": ["presenter"]}
 """
 
 

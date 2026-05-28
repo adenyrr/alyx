@@ -234,6 +234,7 @@ Le supervisor, dans [sub_agents/graph/supervisor.py](sub_agents/graph/supervisor
 ### Agents d’exécution et de transformation
 
 - `dev` : génération d’artifacts HTML, JS ou Python, appuyée par les skills locaux et Context7.
+- `presenter` : génération de présentations reveal.js auto-contenues (slides, pitch decks).
 - `data` : calculs, DuckDB et données financières Yahoo Finance.
 - `geo` : géocodage OSM et météo Open-Meteo.
 - `image_gen` : génération d’image via Pollinations.
@@ -396,6 +397,49 @@ Open WebUI est exposé sur le port `3721`, LiteLLM sur `4000` et MCPO sur `3722`
 
 [mcpo_config.json](mcpo_config.json) déclare les serveurs MCP utilisés par les agents : DuckDB, Git, Memory, Sequential Thinking, Wikipedia, YouTube Transcript, Paper Search, Pandoc, MarkItDown, Yahoo Finance, Fetch Web, Playwright, DuckDuckGo, Open-Meteo, OSM, Context7 et Calculator.
 
+## Intégrations Open WebUI
+
+Au-delà des events `status`/`source`/`notification`/`chat:title` historiques, Alyx
+exploite plusieurs canaux Open WebUI supplémentaires :
+
+- **`chat:tags`** — 2 à 4 tags thématiques générés au premier tour (helper
+  [`_emit_chat_tags`](sub_agents/alyx_pipeline.py)).
+- **`embeds`** — les artifacts HTML de `dev`/`presenter` sont rendus en iframe
+  inline dans la bulle de message au lieu du panneau Artifacts latéral. Le bloc
+  ` ```html ` est extrait avant synthèse pour éviter le doublon. Valve
+  `embed_html_inline` (défaut on). Le flag `replace:True` est supporté pour les
+  widgets mis à jour en place.
+- **`files`** — pièces jointes natives pour les documents writer (DOCX/EPUB/…).
+  Upload via `POST {WEBUI_URL}/api/v1/files/` avec `WEBUI_API_KEY`. Valve
+  `enable_native_file_attachments` (défaut off ; sans token, fallback automatique
+  sur le lien data-URI historique).
+- **Plugin Action séparé** ([openwebui_functions/](openwebui_functions/)) — bouton
+  toolbar « ✨ Alyx » qui propose des opérations de suivi (approfondir, exporter,
+  régénérer en artifact ou en présentation) et resoumet la consigne à Alyx.
+  Installation manuelle via Admin → Functions.
+
+## Personnalisation par utilisateur·rice (UserValves)
+
+En complément des `Valves` globales, Alyx expose une classe `UserValves` permettant
+à chaque utilisateur·rice de surcharger : `language`, `alyx_model`,
+`show_model_footer`, `show_perf_stats`, `enable_scihub`. Les surcharges vides
+laissent les valves globales prévaloir, et l'application est *par requête*
+(concurrence-safe — aucune mutation de l'état partagé).
+
+## Workflows multi-phases avancés
+
+La valve `max_phases` (défaut `2`, max `5`) borne le nombre de phases séquentielles.
+Au-delà de 2, après chaque phase, le superviseur est resollicité avec les résultats
+accumulés pour décider d'une phase supplémentaire (replanification dynamique
+conservatrice — retourne `[]` si la réponse est déjà complète).
+
+## Cache Redis des sorties agents
+
+Valve `enable_agent_cache` (défaut off) : met en cache (Redis DB 2) les sorties
+des agents *déterministes uniquement* — la denylist exclut systématiquement
+`web`, `geo`, `data`, `image_gen`, `media`, `rag`, `memory` ainsi que tout tour
+produisant des artifacts ou des erreurs. TTL configurable via `agent_cache_ttl`.
+
 ## Limitations connues
 
 ### Latence structurelle
@@ -416,9 +460,12 @@ La qualité du résultat dépend des outils externes et des fournisseurs :
 - disponibilité des miroirs Sci-Hub ;
 - qualité des transcriptions ou conversions documentaires.
 
-### Séquentialité limitée
+### Séquentialité bornée
 
-Le workflow séquentiel actuel gère principalement deux phases. Ce design couvre bien les patterns `collecte -> transformation`, mais pas encore des chaînes longues multi-étapes avec replanification dynamique à chaque phase.
+La valve `max_phases` (1–5) borne explicitement la longueur d'une chaîne séquentielle.
+Le défaut `2` conserve le comportement historique `collecte → transformation`. Au-delà,
+la replanification dynamique reste conservatrice (le superviseur ne propose une phase
+supplémentaire que si une étape clairement manquante est détectée).
 
 ### RAG dépendant d’Open WebUI
 
