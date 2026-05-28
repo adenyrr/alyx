@@ -132,10 +132,11 @@ RULE 10c — FILE FORMAT TRIGGERS WRITER (CRITICAL):
   ANY mention of a target file format in the user message MUST trigger writer (alone
   or as phase 2 of a sequential workflow). The writer agent is the ONLY component
   wired to the pandoc MCP server — without writer in the routing, no file conversion
-  happens and the conversation degrades to "I can't generate DOCX" excuses.
-  File-format trigger keywords (any language): ".docx", ".odt", ".epub", ".tex",
-  ".rtf", ".html" (when document, not page), "format Word/DOCX/EPUB/LaTeX",
-  "fichier Word", "as PDF/DOCX/EPUB", "en DOCX/LaTeX/EPUB/RTF/Word", "document Word".
+  happens and the conversation degrades to "I can't generate DOCX/PPTX" excuses.
+  File-format trigger keywords (any language): ".docx", ".pptx", ".odt", ".epub",
+  ".tex", ".rtf", ".html" (when document, not page), "format Word/DOCX/PPTX/PowerPoint/EPUB/LaTeX",
+  "fichier Word/PowerPoint", "as PDF/DOCX/PPTX/EPUB", "en DOCX/PPTX/LaTeX/EPUB/RTF/Word/PowerPoint",
+  "document Word", "présentation PowerPoint".
   Routing pattern when factual research is also needed:
     "Synthèse Hantavirus en docx" → {"routing": ["doc"], "routing_next": ["writer"]}
     "Compile la météo des 5 capitales en .docx" → {"routing": ["geo"], "routing_next": ["writer"]}
@@ -144,6 +145,21 @@ RULE 10c — FILE FORMAT TRIGGERS WRITER (CRITICAL):
   Routing pattern when no research is needed:
     "Convertis ce CV en .docx" → ["writer"]
     "Génère-moi un .docx vide structuré pour un rapport business" → ["writer"]
+
+  PPTX SPECIAL CASE — DUAL ROUTING (presenter + writer in PARALLEL):
+  When the user asks for a presentation/slide deck AS .pptx (or "PowerPoint"),
+  route to BOTH `presenter` AND `writer` IN THE SAME PHASE (flat array). Why:
+    - `presenter` produces a reveal.js HTML deck rendered INLINE for instant preview.
+    - `writer` produces a slide-mode Markdown that pandoc converts to a real,
+      downloadable .pptx file. The two outputs are independent and complementary.
+  Examples:
+    "Fais-moi une présentation PowerPoint sur X" → ["presenter", "writer"]
+    "Un deck pptx avec les chiffres fictifs DNS" → ["presenter", "writer"]
+    "Slides pptx sur l'IA générative" → ["presenter", "writer"]
+  If research is ALSO needed first → phase 1 fetches data, phase 2 = both:
+    "Recherche les ventes Tesla 2024 et fais-en un pptx" → {"routing": ["data"], "routing_next": ["presenter", "writer"]}
+    "Veille IA et présente-la en pptx" → {"routing": ["web", "wikipedia"], "routing_next": ["presenter", "writer"]}
+
   NEVER omit writer when a file format is mentioned. NEVER route only to a research
   agent (doc/data/web/wiki) when the user asks for a specific file format — the
   research output won't be wrapped in a downloadable document.
@@ -218,6 +234,9 @@ RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "Prépare un diaporama de cours sur la photosynthèse" → ["presenter"]
   "Recherche les chiffres du marché EV 2024 et fais-en une présentation" → {"routing": ["web", "wikipedia"], "routing_next": ["presenter"]}
   "Récupère les ventes Tesla et présente-les en slides" → {"routing": ["data"], "routing_next": ["presenter"]}
+  "Fais-moi une présentation pptx avec des données fictives" → ["presenter", "writer"]
+  "Pitch deck pptx sur ma startup SaaS" → ["presenter", "writer"]
+  "Recherche les chiffres du marché EV 2024 et fais-en un pptx" → {"routing": ["web", "wikipedia"], "routing_next": ["presenter", "writer"]}
 """
 
 

@@ -172,11 +172,14 @@ Règles strictes de pass-through :
     (rapport/lettre/email/CV/…), auquel cas restitue la sortie writer.
 
 INTERDICTION ABSOLUE de générer ces phrases (ou leurs paraphrases) :
-  ✗ "Je ne peux pas générer directement un fichier DOCX/PDF/EPUB/..."
-  ✗ "I cannot create binary files like Microsoft Word..."
-  ✗ "Voici un modèle/du texte que tu pourras copier dans Word..."
+  ✗ "Je ne peux pas générer directement un fichier DOCX/PPTX/PDF/EPUB/..."
+  ✗ "I cannot create binary files like Microsoft Word/PowerPoint..."
+  ✗ "Voici un modèle/du texte que tu pourras copier dans Word/PowerPoint..."
   ✗ "Utilise un convertisseur en ligne / Pandoc pour transformer..."
-  ✗ "Je t'envoie le texte brut optimisé pour Word"
+  ✗ "Je t'envoie le texte brut optimisé pour Word/PowerPoint"
+  ✗ "Voici un format reveal.js (HTML) à la place du PPTX demandé"
+     (si presenter ET writer ont tourné, les DEUX livrables sont là — décris-les
+     ensemble, ne te justifie pas de l'un par rapport à l'autre).
 
 INTERDICTION ABSOLUE de FABRIQUER un lien `data:` (data-URI) :
   ✗ Ne JAMAIS inventer une chaîne base64 ni écrire `data:...;base64,...` toi-même.
@@ -188,9 +191,9 @@ INTERDICTION ABSOLUE de FABRIQUER un lien `data:` (data-URI) :
     produit cette fois — relance en précisant explicitement le format (.docx, .epub,
     .tex…) pour activer l'agent rédaction. »
 
-La conversion vers DOCX/EPUB/TEX/ODT/RTF/HTML est gérée EXCLUSIVEMENT par l'agent WRITER
-en aval via le serveur pandoc, et le lien est injecté par le système. PDF n'est pas géré
-(LaTeX non installé) — si demandé, suggère un autre format.
+La conversion vers DOCX/PPTX/EPUB/TEX/ODT/RTF/HTML est gérée EXCLUSIVEMENT par
+l'agent WRITER en aval via le serveur pandoc, et le lien est injecté par le système.
+PDF n'est pas géré (LaTeX non installé) — si demandé, suggère un autre format.
 
 ═════════════ VISION ═════════════
 Tu as des capacités natives de vision. Si des images t'ont été transmises,
@@ -1425,6 +1428,33 @@ async def _emit_writer_attachments(event_emitter, valves, artifacts: list[dict])
 
 _HTML_FENCE_RE = re.compile(r"```html[^\n]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
+# Petit script injecté dans chaque embed extrait : poste la hauteur effective au
+# parent Open WebUI (cf. doc rich-ui, message `iframe:height`). Sans cela, l'iframe
+# garde la hauteur par défaut très courte d'OWUI, ce qui rend les decks reveal.js
+# et autres widgets pleins-écran illisibles. Pour reveal.js spécifiquement, on
+# garantit un minimum de 720 px (sinon le scaling auto rend le contenu minuscule).
+_HEIGHT_REPORTER_JS = (
+    "<script>(function(){function r(){"
+    "var d=document.querySelector('.reveal');"
+    "var h=d?Math.max(720,(d.offsetHeight||720)):"
+    "Math.max(document.documentElement.scrollHeight||400,400);"
+    "try{parent.postMessage({type:'iframe:height',height:h},'*');}catch(e){}}"
+    "window.addEventListener('load',r);"
+    "window.addEventListener('resize',r);"
+    "setTimeout(r,300);setTimeout(r,1200);"
+    "})();</script>"
+)
+
+
+def _inject_height_reporter(html: str) -> str:
+    """Injecte `_HEIGHT_REPORTER_JS` juste avant `</body>` (ou en fin) si absent."""
+    if "iframe:height" in html:
+        return html  # déjà présent — ne pas dupliquer
+    idx = html.lower().rfind("</body>")
+    if idx >= 0:
+        return html[:idx] + _HEIGHT_REPORTER_JS + html[idx:]
+    return html + _HEIGHT_REPORTER_JS
+
 
 def _extract_html_embeds(text: str) -> tuple[list[str], str]:
     """
@@ -1445,7 +1475,7 @@ def _extract_html_embeds(text: str) -> tuple[list[str], str]:
         html = match.group(1).strip()
         if not html:
             return match.group(0)
-        embeds.append(html)
+        embeds.append(_inject_height_reporter(html))
         title_m = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
         label = title_m.group(1).strip() if title_m else "interactif"
         return (
