@@ -2,8 +2,14 @@
 Writer Agent — création et rédaction de documents structurés longue forme.
 
 Modèle : openrouter/deepseek (qualité/coût équilibré pour la prose française et anglaise).
-Outils : pandoc (MCPO) — conversion Markdown → DOCX / LaTeX / EPUB / HTML / ODT si
-le format final est explicitement demandé. La sortie canonique reste Markdown.
+Outils : pypandoc-binary (binaire pandoc embarqué dans le conteneur pipelines) —
+conversion Markdown → DOCX / PPTX / LaTeX / EPUB / HTML / ODT / RTF si le format
+final est explicitement demandé. La sortie canonique reste Markdown.
+
+Note : le MCP `pandoc` (mcp-pandoc) du conteneur mcpo a un whitelist interne qui
+EXCLUT pptx (formats supportés : md/html/pdf/docx/rst/latex/epub/txt/ipynb/odt).
+On contourne en exécutant pandoc directement via pypandoc-binary, qui supporte
+nativement tous les formats pandoc, dont pptx.
 
 Workflow type :
   - Demande directe ("rédige un rapport business sur X") → writer compose en Markdown.
@@ -19,6 +25,7 @@ Le routage du supervisor place souvent writer en phase 2 d'un workflow séquenti
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import re
@@ -30,7 +37,6 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from tools.mcpo_client import call_tool
 from tools.skills_loader import find_relevant as find_relevant_skills
 
 if TYPE_CHECKING:
@@ -270,7 +276,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     if fmt:
         try:
             await _emit(f"📦 Conversion → {fmt.upper()} via pandoc…")
-            artifact = await _convert_via_pandoc(markdown_output, fmt)
+            artifact = await _convert_via_pypandoc(markdown_output, fmt)
             if artifact:
                 artifacts.append(artifact)
                 # IMPORTANT : on ne met PAS le data-URI base64 dans le texte de
@@ -306,29 +312,30 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     }
 
 
-async def _convert_via_pandoc(markdown: str, fmt: str) -> dict | None:
+async def _convert_via_pypandoc(markdown: str, fmt: str) -> dict | None:
     """
-    Convertit `markdown` via le MCP pandoc et renvoie un dict d'artifact prêt à
-    embarquer (base64 + filename + mime), ou None si la sortie est vide.
+    Convertit `markdown` via pypandoc-binary (binaire pandoc embarqué dans la
+    wheel — pas de dépendance MCP). Supporte TOUS les formats pandoc, dont pptx,
+    contrairement au MCP `pandoc` dont le whitelist exclut pptx.
 
-    mcp-pandoc EXIGE `output_file` pour les formats binaires (docx/odt/epub/rtf).
-    On écrit dans /data/exports (volume partagé mcpo↔pipelines) puis on relit
-    le fichier pour le base64-encoder. Le fichier est supprimé après lecture.
+    Renvoie un dict d'artifact prêt à embarquer (base64 + filename + mime), ou
+    None si la sortie est vide. La conversion (CPU-bound) est exécutée dans un
+    thread via asyncio.to_thread pour ne pas bloquer la boucle event-loop.
     """
     _EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"writer-{uuid.uuid4().hex[:12]}.{fmt}"
     output_path = _EXPORTS_DIR / filename
 
-    payload: dict[str, str] = {
-        "contents": markdown,
-        "input_format": "markdown",
-        "output_format": fmt,
-    }
-    # Pour les formats binaires, output_file est requis. Pour les textuels on
-    # le fournit aussi : simplifie la branche, évite de parser la réponse MCP.
-    payload["output_file"] = str(output_path)
+    def _convert_blocking() -> None:
+        import pypandoc  # lazy : ~150 Mo bundle, ne charge qu'à la demande
+        pypandoc.convert_text(
+            markdown,
+            fmt,
+            format="markdown",
+            outputfile=str(output_path),
+        )
 
-    await call_tool("pandoc", "convert-contents", payload)
+    await asyncio.to_thread(_convert_blocking)
 
     if not output_path.exists() or output_path.stat().st_size == 0:
         return None

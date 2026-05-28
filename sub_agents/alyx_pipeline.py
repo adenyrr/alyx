@@ -2,7 +2,7 @@
 title: Alyx
 author: adenyrr
 version: 0.6.0
-requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, openai>=1.0, pydantic>=2.0
+requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, pypandoc-binary>=1.13, openai>=1.0, pydantic>=2.0
 """
 
 """
@@ -1432,11 +1432,12 @@ _HTML_FENCE_RE = re.compile(r"```html[^\n]*\n(.*?)```", re.DOTALL | re.IGNORECAS
 # parent Open WebUI (cf. doc rich-ui, message `iframe:height`). Sans cela, l'iframe
 # garde la hauteur par défaut très courte d'OWUI, ce qui rend les decks reveal.js
 # et autres widgets pleins-écran illisibles. Pour reveal.js spécifiquement, on
-# garantit un minimum de 720 px (sinon le scaling auto rend le contenu minuscule).
+# garantit un minimum de 900 px (sinon le scaling auto rend le contenu minuscule
+# et les slides un peu denses débordent du viewport virtuel 960x700).
 _HEIGHT_REPORTER_JS = (
     "<script>(function(){function r(){"
     "var d=document.querySelector('.reveal');"
-    "var h=d?Math.max(720,(d.offsetHeight||720)):"
+    "var h=d?Math.max(900,(d.offsetHeight||900)):"
     "Math.max(document.documentElement.scrollHeight||400,400);"
     "try{parent.postMessage({type:'iframe:height',height:h},'*');}catch(e){}}"
     "window.addEventListener('load',r);"
