@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / build
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env.bak
+
+# ─────────────────────────────────────────────────────────────
+# Environment & secrets
+# ─────────────────────────────────────────────────────────────
+# Real env files (example.env reste tracked comme template)
+.env
+.env.local
+.env.*.local
+*.local.env
+
+# ─────────────────────────────────────────────────────────────
+# IDE / éditeurs
+# ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─────────────────────────────────────────────────────────────
+# Tests / coverage
+# ─────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ─────────────────────────────────────────────────────────────
+# Outputs / volumes / artefacts locaux
+# ─────────────────────────────────────────────────────────────
+# Volumes Docker locaux (si jamais bind-mount au lieu de volumes nommés)
+data/
+exports/
+uploads/
+papers/
+
+# Logs
+*.log
+logs/
+
+# ─────────────────────────────────────────────────────────────
+# Claude Code session artifacts
+# ─────────────────────────────────────────────────────────────
+.claude/sessions/
+.claude/cache/
