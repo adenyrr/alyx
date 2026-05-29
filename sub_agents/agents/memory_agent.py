@@ -28,6 +28,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
+from tools import vector_memory as _vm
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -113,11 +114,35 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         await _emit("🧠 Recherche en mémoire…")
         raw_memories = await call_tool("memory", "search_nodes", {"query": user_text})
     except Exception:
+        raw_memories = None
+
+    filtered = _filter_to_user(raw_memories, entity_name) if raw_memories is not None else {}
+
+    # Recall vectoriel (Qdrant) : ramène jusqu'à 3 tours sémantiquement proches
+    # du tour courant, indexés précédemment. Complémentaire au knowledge graph.
+    try:
+        similar_turns = await _vm.recall_similar(user_id=user_id, query=user_text, top_k=3)
+    except Exception:
+        similar_turns = []
+
+    kg_block = json.dumps(filtered, ensure_ascii=False)[:2000] if filtered else ""
+    vec_block = ""
+    if similar_turns:
+        vec_block = "\n\n".join(
+            f"[{t['score']:.2f}] User: {t['user_text'][:200]}\nAlyx: {t['alyx_response'][:400]}"
+            for t in similar_turns
+        )
+
+    if not kg_block and not vec_block:
         return {"agent_outputs": {"memory": ""}}
 
-    filtered = _filter_to_user(raw_memories, entity_name)
-    recall_result = json.dumps(filtered, ensure_ascii=False)[:2000]
-    if not recall_result or recall_result in ("{}", "[]", "null"):
+    recall_result = ""
+    if kg_block and kg_block not in ("{}", "[]", "null"):
+        recall_result += f"## Knowledge graph\n{kg_block}\n\n"
+    if vec_block:
+        recall_result += f"## Tours passés similaires (vector memory)\n{vec_block}"
+    recall_result = recall_result.strip()
+    if not recall_result:
         return {"agent_outputs": {"memory": ""}}
 
     llm = ChatOpenAI(
@@ -214,6 +239,27 @@ async def run_bg(state: "AlyxState", model: str | None = None) -> None:
             await call_tool("memory", "add_observations", {
                 "observations": [{"entityName": entity_name, "contents": facts}]
             })
+
+        # Indexation vectorielle du tour (best-effort, parallèle indépendant
+        # du knowledge graph). Le dernier message user + la dernière réponse
+        # Alyx forment la « turn » indexée.
+        user_text = ""
+        alyx_text = ""
+        for m in reversed(messages):
+            if alyx_text and user_text:
+                break
+            if m.type == "ai" and not alyx_text:
+                alyx_text = m.content if isinstance(m.content, str) else ""
+            elif m.type == "human" and not user_text:
+                user_text = m.content if isinstance(m.content, str) else ""
+        if user_text:
+            try:
+                await _vm.index_turn(
+                    user_id=user_id, chat_id=chat_id,
+                    user_text=user_text, alyx_response=alyx_text,
+                )
+            except Exception:
+                pass
     except Exception as exc:
         _LOGGER.warning("Memory background condensation failed: %s", exc)
 

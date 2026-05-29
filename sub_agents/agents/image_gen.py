@@ -1,15 +1,23 @@
 """
-ImageGen Agent — génération d'images via Pollinations.ai (direct HTTP).
+ImageGen Agent — génération d'images multi-provider local-friendly.
 
-N'utilise PAS LiteLLM. Appelle directement l'API Pollinations :
-  GET https://gen.pollinations.ai/image/{prompt}?model=...&width=...&height=...&enhance=...
+Providers supportés (par ordre de fallback) :
+  1. Pollinations.ai (direct HTTP, gratuit, sans clé) — défaut, local-friendly.
+  2. LiteLLM (DALL-E / Stable Diffusion / autres modèles vision déclarés dans
+     litellm_config.yaml). Permet à un utilisateur·rice ayant configuré son
+     propre fournisseur de l'utiliser sans changer le code.
 
-Paramètres lus depuis state["_pollinations"] (injecté par alyx_pipeline.py).
+Sélection via state["_pollinations"]["provider"] (défaut "pollinations") :
+  - "pollinations" : appel HTTP direct
+  - "litellm" : utilise le client OpenAI compatible vers LiteLLM
+                (modèle dans state["_pollinations"]["model"], ex. "openai/dall-e-3")
+
 La valve enable_image_gen peut désactiver complètement l'agent.
 """
 
 from __future__ import annotations
 
+import base64
 import os
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -32,15 +40,23 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
 
     # Valve disable
     if not cfg.get("enable", True):
-        return {"agent_outputs": {"image_gen": "🚫 Génération d'images désactivée."}}
+        return {"agent_outputs": {"image_gen": "🚫 Génération d'images désactivée."},
+                "agent_confidence": {"image_gen": 0.0}}
 
     pol_model = cfg.get("model", "flux")
+    provider = cfg.get("provider", "pollinations")
     width = int(cfg.get("width", 1024))
     height = int(cfg.get("height", 1024))
     enhance = cfg.get("enhance", True)
     api_key = cfg.get("api_key", "")
 
     prompt = _extract_image_prompt(user_text)
+
+    # Provider 2 : LiteLLM (DALL-E ou autre modèle image déclaré dans litellm_config.yaml)
+    if provider == "litellm":
+        return await _generate_via_litellm(prompt, pol_model, width, height)
+
+    # Provider 1 : Pollinations (défaut, gratuit, sans clé)
     encoded_prompt = quote(prompt, safe="")
 
     params: dict[str, str] = {
@@ -65,25 +81,74 @@ async def run(state: "AlyxState", model: str | None = None) -> dict:
             # Pollinations renvoie l'image directement OU une URL finale après redirect
             final_url = str(resp.url)
 
-            # Si on reçoit une image binaire, construire un data URI (rare en pratique)
+            # Alt-text descriptif (accessibilité + indexation) construit depuis le
+            # prompt utilisateur, tronqué pour rester lisible. Inclut le modèle pour
+            # transparence (« quelle IA a généré ça ? »).
+            alt_text = f"{prompt[:140]} — {pol_model} via Pollinations.ai"
             content_type = resp.headers.get("content-type", "")
             if content_type.startswith("image/"):
                 import base64
                 img_b64 = base64.b64encode(resp.content).decode()
                 mime = content_type.split(";")[0].strip()
-                img_md = f"![Image générée](data:{mime};base64,{img_b64})"
+                img_md = f"![{alt_text}](data:{mime};base64,{img_b64})"
             else:
                 # Généralement Pollinations redirige vers une URL image CDN
-                img_md = f"![Image générée : {prompt}]({final_url})"
+                img_md = f"![{alt_text}]({final_url})"
+            # Citation source en ligne (cohérent avec les > 📊 / > 📖 des autres agents)
+            img_md += f"\n\n> 🎨 Source : [Pollinations.ai · modèle {pol_model}]({final_url})"
 
             return {
                 "agent_outputs": {"image_gen": img_md},
+                "agent_confidence": {"image_gen": 0.85},
                 "agent_metrics": {},
                 "artifacts": [{"type": "image", "url": final_url, "prompt": prompt}],
             }
 
     except Exception as exc:
-        return {"agent_outputs": {"image_gen": f"⚠️ Génération d'image échouée : {exc}"}}
+        return {"agent_outputs": {"image_gen": f"⚠️ Génération d'image échouée : {exc}"},
+                "agent_confidence": {"image_gen": 0.0}}
+
+
+async def _generate_via_litellm(prompt: str, model: str, width: int, height: int) -> dict:
+    """Génère une image via LiteLLM (DALL-E 3, etc.) — utile si un fournisseur
+    image est déclaré dans litellm_config.yaml. Retourne le même contrat que
+    le provider Pollinations (markdown + artifact).
+    """
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            base_url=os.environ.get("LITELLM_URL", "http://litellm:4000/v1"),
+            api_key=os.environ.get("LITELLM_API_KEY", ""),
+        )
+        # Taille la plus proche dans le set supporté par DALL-E 3 (1024x1024, 1792x1024, 1024x1792)
+        size = "1024x1024"
+        if width > height:
+            size = "1792x1024"
+        elif height > width:
+            size = "1024x1792"
+        resp = await client.images.generate(
+            model=model if model not in ("flux", "zimage") else "dall-e-3",
+            prompt=prompt,
+            n=1,
+            size=size,
+            response_format="b64_json",
+        )
+        b64 = resp.data[0].b64_json
+        alt_text = f"{prompt[:140]} — {model} via LiteLLM"
+        img_md = f"![{alt_text}](data:image/png;base64,{b64})\n\n> 🎨 Source : modèle `{model}` via LiteLLM"
+        return {
+            "agent_outputs": {"image_gen": img_md},
+            "agent_confidence": {"image_gen": 0.90},
+            "agent_metrics": {},
+            "artifacts": [{
+                "type": "image",
+                "url": f"data:image/png;base64,{b64}",
+                "prompt": prompt,
+            }],
+        }
+    except Exception as exc:
+        return {"agent_outputs": {"image_gen": f"⚠️ Génération LiteLLM échouée : {exc}"},
+                "agent_confidence": {"image_gen": 0.0}}
 
 
 def _extract_image_prompt(text: str) -> str:

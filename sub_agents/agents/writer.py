@@ -269,21 +269,32 @@ def _yaml_has_title(markdown: str) -> bool:
 def _pandoc_extra_args(markdown: str, fmt: str) -> list[str]:
     """Arguments pandoc spécifiques par format de sortie.
 
-    - pptx : --slide-level=1 (chaque # = nouvelle slide)
-    - html / latex : --standalone (sinon pandoc émet un FRAGMENT, pas un fichier
-      autonome — incompréhensible pour l'utilisateur·rice qui télécharge)
-    - epub : --metadata title=... en fallback si le markdown n'a pas de
-      `title:` dans son YAML front matter (sinon pandoc avertit/échoue)
+    - pptx : --slide-level=1 (chaque # = nouvelle slide) + --reference-doc=... si dispo
+    - docx : --reference-doc=... si template configuré (branding entreprise)
+    - html / latex : --standalone (sinon pandoc émet un FRAGMENT)
+    - epub : --metadata title=... fallback si YAML n'a pas de `title:`
+
+    Les templates de référence sont configurés via les env vars / valves :
+      ALYX_WRITER_REFERENCE_DOCX (chemin .docx)
+      ALYX_WRITER_REFERENCE_PPTX (chemin .pptx)
+    Le chemin doit être accessible depuis le conteneur pipelines (volume monté).
     """
+    args: list[str] = []
     if fmt == "pptx":
-        return ["--slide-level=1"]
-    if fmt in ("html", "latex"):
-        return ["--standalone"]
-    if fmt == "epub":
+        args.append("--slide-level=1")
+        ref = os.environ.get("ALYX_WRITER_REFERENCE_PPTX", "")
+        if ref and Path(ref).exists():
+            args += ["--reference-doc", ref]
+    elif fmt == "docx":
+        ref = os.environ.get("ALYX_WRITER_REFERENCE_DOCX", "")
+        if ref and Path(ref).exists():
+            args += ["--reference-doc", ref]
+    elif fmt in ("html", "latex"):
+        args.append("--standalone")
+    elif fmt == "epub":
         if not _yaml_has_title(markdown):
-            return ["--metadata", f"title={_extract_title(markdown)}"]
-        return []
-    return []
+            args += ["--metadata", f"title={_extract_title(markdown)}"]
+    return args
 
 
 def _detect_format(text: str) -> str | None:

@@ -79,3 +79,95 @@ async def store(redis_url: str, key: str, agent_outputs: dict, ttl: int) -> None
             await client.aclose()
     except Exception:
         pass
+
+
+# ─── Cache sémantique (Qdrant) ───────────────────────────────────────────────
+# Complémentaire au cache exact (Redis ci-dessus). Cherche par similarité
+# cosinus dans Qdrant : si une question sémantiquement proche a déjà été
+# traitée (au-delà d'un seuil de similarité), réutilise la réponse.
+
+_SEMANTIC_COLLECTION_DEFAULT = "alyx_semantic_cache"
+
+
+async def _embed(text: str, embed_url: str, embed_model: str, api_key: str) -> list[float] | None:
+    """Calcule un embedding via LiteLLM (compat OpenAI)."""
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(base_url=embed_url, api_key=api_key)
+        resp = await client.embeddings.create(model=embed_model, input=text[:8000])
+        return list(resp.data[0].embedding)
+    except Exception:
+        return None
+
+
+async def semantic_get(qdrant_url: str, qdrant_api_key: str, collection: str,
+                       embedding: list[float], threshold: float = 0.92) -> dict | None:
+    """Cherche dans Qdrant le point le plus proche de `embedding`. Si score ≥
+    threshold (cosinus), retourne son payload['agent_outputs']. Sinon None.
+    Échec silencieux : indisponibilité Qdrant ⇒ None (pas d'erreur bloquante).
+    """
+    if not embedding:
+        return None
+    try:
+        import httpx
+        headers = {"api-key": qdrant_api_key} if qdrant_api_key else {}
+        url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points/search"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, headers=headers, json={
+                "vector": embedding,
+                "limit": 1,
+                "with_payload": True,
+            })
+            if resp.status_code != 200:
+                return None
+            results = resp.json().get("result", [])
+            if not results:
+                return None
+            top = results[0]
+            if float(top.get("score", 0.0)) < threshold:
+                return None
+            payload = top.get("payload", {})
+            ao = payload.get("agent_outputs")
+            return ao if isinstance(ao, dict) else None
+    except Exception:
+        return None
+
+
+async def semantic_store(qdrant_url: str, qdrant_api_key: str, collection: str,
+                         embedding: list[float], agent_outputs: dict) -> None:
+    """Stocke (embedding, agent_outputs) dans Qdrant. Échec silencieux.
+
+    Crée la collection si elle n'existe pas (avec la dimension d'embedding
+    déduite). Idempotent.
+    """
+    if not embedding or not agent_outputs:
+        return
+    try:
+        import hashlib
+        import httpx
+        headers = {"api-key": qdrant_api_key} if qdrant_api_key else {}
+        base = qdrant_url.rstrip("/")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Crée la collection idempotemment
+            await client.put(
+                f"{base}/collections/{collection}",
+                headers=headers,
+                json={"vectors": {"size": len(embedding), "distance": "Cosine"}},
+            )
+            # Upsert du point. Pour ne pas accumuler indéfiniment, on hash le
+            # premier output text comme ID — un même contenu réécrit son point.
+            first_out = next(iter(agent_outputs.values()), "")
+            pid_str = hashlib.sha256(first_out.encode("utf-8", errors="ignore")).hexdigest()[:16]
+            # Qdrant accepte les IDs en int — on convertit hex en int.
+            pid = int(pid_str, 16)
+            await client.put(
+                f"{base}/collections/{collection}/points",
+                headers=headers,
+                json={"points": [{
+                    "id": pid,
+                    "vector": embedding,
+                    "payload": {"agent_outputs": agent_outputs},
+                }]},
+            )
+    except Exception:
+        pass
