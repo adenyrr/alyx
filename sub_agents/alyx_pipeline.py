@@ -1,8 +1,8 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.6.0
-requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, pypandoc-binary>=1.13, openai>=1.0, pydantic>=2.0
+version: 0.7.0
+requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, pypandoc-binary>=1.13, openpyxl>=3.1, openai>=1.0, pydantic>=2.0
 """
 
 """
@@ -69,9 +69,18 @@ _AGENT_ICONS = {
     "image_gen": "🎨 Illustration",
     "rag":       "📚 Documents",
     "geo":       "🗺️ Géographie",
-    "reasoning": "🧩 Raisonnement",
-    "writer":    "✍️ Rédaction",
-    "presenter": "🎞️ Présentation",
+    "reasoning":    "🧩 Raisonnement",
+    "writer":       "✍️ Rédaction",
+    "presenter":    "🎞️ Présentation",
+    "translator":   "🌍 Traduction",
+    "summarizer":   "📰 Résumé",
+    "vision":       "👁️ Vision",
+    "mindmap":      "🗺️ Mindmap",
+    "diagram":      "📐 Diagramme",
+    "spreadsheet":  "📊 Tableur",
+    "code_exec":    "🐍 Exécution code",
+    "fact_checker": "🔬 Fact-checker",
+    "audio":        "🎙️ Audio",
 }
 
 # Noms courts des modèles pour la signature
@@ -95,9 +104,18 @@ _AGENT_SHORT_NAMES: dict[str, str] = {
     "image_gen":  "Illustration",
     "rag":        "Documents",
     "geo":        "Géographie",
-    "reasoning":  "Raisonnement",
-    "writer":     "Rédaction",
-    "presenter":  "Présentation",
+    "reasoning":    "Raisonnement",
+    "writer":       "Rédaction",
+    "presenter":    "Présentation",
+    "translator":   "Traduction",
+    "summarizer":   "Résumé",
+    "vision":       "Vision",
+    "mindmap":      "Mindmap",
+    "diagram":      "Diagramme",
+    "spreadsheet":  "Tableur",
+    "code_exec":    "Exécution code",
+    "fact_checker": "Fact-checker",
+    "audio":        "Audio",
 }
 
 # Prix modèles en $/1M tokens {input, output}
@@ -125,10 +143,19 @@ _AGENT_MODULES: dict[str, str] = {
     "media":     "agents.media",
     "data":      "agents.data",
     "image_gen": "agents.image_gen",
-    "rag":       "agents.rag_agent",
-    "reasoning": "agents.reasoning",
-    "writer":    "agents.writer",
-    "presenter": "agents.presenter",
+    "rag":          "agents.rag_agent",
+    "reasoning":    "agents.reasoning",
+    "writer":       "agents.writer",
+    "presenter":    "agents.presenter",
+    "translator":   "agents.translator",
+    "summarizer":   "agents.summarizer",
+    "vision":       "agents.vision",
+    "mindmap":      "agents.mindmap",
+    "diagram":      "agents.diagram",
+    "spreadsheet":  "agents.spreadsheet",
+    "code_exec":    "agents.code_exec",
+    "fact_checker": "agents.fact_checker",
+    "audio":        "agents.audio",
 }
 
 _ALYX_SYSTEM_TEMPLATE = """\
@@ -315,6 +342,38 @@ def _extract_user_valves(body: dict) -> dict[str, Any]:
     return valves
 
 
+def _extract_audios_b64(messages: list[dict]) -> list[str]:
+    """Extrait les fichiers audio base64 du dernier message utilisateur.
+
+    Open WebUI peut transmettre des audio sous deux formes :
+      - dans un block `audio_url` (similaire à image_url) → data:audio/*;base64,…
+      - dans `files` (uploaded file) — non géré ici, à transiter via le RAG / media
+    On capte uniquement le premier format (audio inline).
+    """
+    audios: list[str] = []
+    for m in reversed(messages or []):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content", "")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    # audio_url ou input_audio (variations de schéma)
+                    url = ""
+                    if part.get("type") == "audio_url":
+                        url = part.get("audio_url", {}).get("url", "")
+                    elif part.get("type") == "input_audio":
+                        data = part.get("input_audio", {}).get("data", "")
+                        if data:
+                            audios.append(data)
+                            continue
+                    if url.startswith("data:audio"):
+                        b64 = url.split(",", 1)[-1]
+                        audios.append(b64)
+        break
+    return audios
+
+
 def _extract_images_b64(messages: list[dict]) -> list[str]:
     """Extrait les images base64 du dernier message utilisateur."""
     images: list[str] = []
@@ -411,7 +470,14 @@ class Pipeline:
         show_perf_stats: bool = Field(default=False, description="Afficher les métriques de performance dans la signature (⏱ temps, tokens, coût estimé)")
         realtime_status: bool = Field(default=True, description="Émettre des statuts OpenWebUI en temps réel (quel agent travaille)")
         enable_memory_bg: bool = Field(default=True, description="Activer la condensation mémoire en arrière-plan")
+        memory_always_on: bool = Field(default=True, description="Consulter l'agent memory automatiquement à chaque tour (en parallèle phase 1) pour enrichir le contexte sans surcoût UX")
+        enable_critic_loop: bool = Field(default=False, description="Pass adversarial post-phase 1 : fact_checker vérifie les claims des autres agents avant synthèse. Coût ~3-5s mais gain qualité radical.")
+        critic_confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0, description="Seuil de confiance fact_checker en dessous duquel un avertissement est ajouté à la synthèse")
+        writer_reference_docx: str = Field(default="", description="Chemin (dans le conteneur) vers un template DOCX de référence (--reference-doc) pour brander les sorties writer")
+        writer_reference_pptx: str = Field(default="", description="Chemin vers un template PPTX de référence pour brander les sorties writer/presenter pptx")
         embed_html_inline: bool = Field(default=True, description="Rendre les artifacts HTML de l'agent dev en iframe inline (event `embeds` OpenWebUI) au lieu de blocs de code markdown (panneau Artifacts)")
+        persist_html_artifacts: bool = Field(default=True, description="Produire AUSSI un fichier .html téléchargeable pour chaque artifact HTML (dev/presenter/mindmap/diagram) en plus de l'iframe inline")
+        emit_execution_graph: bool = Field(default=False, description="Émettre un diagramme mermaid post-turn récapitulant les agents exécutés (phases, durées). Utile pour le debug.")
 
         # --- Superviseur ---
         supervisor_model: str = Field(default="openrouter/qwen3.5-flash", description="Modèle du superviseur (routage)")
@@ -429,14 +495,34 @@ class Pipeline:
         model_reasoning: str = Field(default="openrouter/deepseek", description="Modèle agent Raisonnement (sequential-thinking, analyses complexes)")
         model_writer: str = Field(default="openrouter/deepseek", description="Modèle agent Rédaction (documents longue forme, prose structurée)")
         model_presenter: str = Field(default="openrouter/kimi-k2.5", description="Modèle agent Présentation (slides reveal.js)")
+        model_translator: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Traduction")
+        model_summarizer: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Résumé")
+        model_vision: str = Field(default="openrouter/gpt-oss", description="Modèle agent Vision (LLM multimodal via LiteLLM)")
+        model_mindmap: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Mindmap (markmap.js)")
+        model_diagram: str = Field(default="openrouter/qwen3.5-flash", description="Modèle agent Diagramme (mermaid/jointjs/excalidraw)")
+        model_spreadsheet: str = Field(default="openrouter/deepseek", description="Modèle agent Tableur (XLSX via openpyxl)")
+        model_code_exec: str = Field(default="openrouter/kimi-k2.5", description="Modèle agent Exécution code Python (sandbox open-terminal)")
+        model_fact_checker: str = Field(default="openrouter/deepseek", description="Modèle agent Fact-checker (vérification adversariale)")
+        model_audio: str = Field(default="openrouter/gpt-oss", description="Modèle agent Audio (post-transcription Whisper)")
 
         # --- Workflows multi-phases ---
         max_phases: int = Field(default=2, ge=1, le=5, description="Nombre max de phases séquentielles (1 = parallèle seul, 2 = comportement actuel, >2 = replanification dynamique)")
 
-        # --- Cache Redis des sorties agents ---
-        enable_agent_cache: bool = Field(default=False, description="Mettre en cache (Redis) les sorties d'agents déterministes pour dédupliquer les requêtes répétées")
+        # --- Cache Redis des sorties agents (exact match) ---
+        enable_agent_cache: bool = Field(default=False, description="Cache exact-match (Redis) des sorties d'agents déterministes")
         agent_cache_ttl: int = Field(default=3600, ge=60, le=86400, description="Durée de vie du cache agents en secondes")
-        redis_url: str = Field(default=_REDIS_URL, description="URL Redis pour le cache agents (DB séparée des autres services)")
+        redis_url: str = Field(default=_REDIS_URL, description="URL Redis pour le cache agents")
+
+        # --- Cache sémantique (Qdrant) — complémentaire ---
+        enable_semantic_cache: bool = Field(default=False, description="Cache sémantique : si une question proche a été traitée (similarité cosinus ≥ seuil), réutilise la réponse")
+        semantic_cache_threshold: float = Field(default=0.92, ge=0.7, le=0.99, description="Seuil de similarité pour le cache sémantique")
+        semantic_cache_collection: str = Field(default="alyx_semantic_cache", description="Collection Qdrant dédiée au cache sémantique")
+
+        # --- Optimisations LLM ---
+        enable_context_compression: bool = Field(default=False, description="Compresser les outputs agents > 2000 chars avant la synthèse (1 appel LLM cheap, gain coût synthèse 20-40%)")
+        context_compression_target: int = Field(default=8000, ge=2000, le=30000, description="Seuil cumulé en chars au-dessus duquel la compression s'active")
+        enable_model_autoselect: bool = Field(default=True, description="Basculer sur un modèle cheap pour les requêtes triviales (salutations, accusés de réception)")
+        enable_prewarming: bool = Field(default=True, description="Pré-chauffer les connexions LiteLLM au démarrage (réduit la latence du premier tour)")
 
         # --- Pièces jointes natives (writer) ---
         enable_native_file_attachments: bool = Field(default=False, description="Uploader les documents writer vers Open WebUI et les attacher en pièce jointe native (event `files`) au lieu d'un lien data-URI. Nécessite webui_url + webui_api_key")
@@ -462,7 +548,8 @@ class Pipeline:
         truncate_external_content:   int = Field(default=4000, ge=500, le=20000, description="Caractères max par contenu externe (page web, transcript, chunk RAG, full-text…) avant injection prompt")
 
         # --- Génération d'images (Pollinations.ai — appel direct GET, sans passer par LiteLLM) ---
-        enable_image_gen: bool = Field(default=True, description="Activer la génération d'images via Pollinations.ai")
+        enable_image_gen: bool = Field(default=True, description="Activer la génération d'images")
+        image_gen_provider: str = Field(default="pollinations", description="Fournisseur image : `pollinations` (gratuit, sans clé) ou `litellm` (DALL-E ou autre modèle image déclaré dans litellm_config.yaml)")
         pollinations_api_key: str = Field(default="", description="Clé API Pollinations.ai (optionnelle — gratuit sans clé pour les modèles de base)")
         pollinations_model: str = Field(default="flux", description="Modèle Pollinations : flux, zimage, gptimage, klein-large, imagen-4, seedream5, nanobanana, grok-imagine…")
         pollinations_width: int = Field(default=1024, ge=64, le=4096, description="Largeur de l'image générée (pixels)")
@@ -544,19 +631,39 @@ class Pipeline:
             "rag":        self.valves.model_rag,
             "reasoning":  self.valves.model_reasoning,
             "writer":     self.valves.model_writer,
-            "presenter":  self.valves.model_presenter,
+            "presenter":    self.valves.model_presenter,
+            "translator":   self.valves.model_translator,
+            "summarizer":   self.valves.model_summarizer,
+            "vision":       self.valves.model_vision,
+            "mindmap":      self.valves.model_mindmap,
+            "diagram":      self.valves.model_diagram,
+            "spreadsheet":  self.valves.model_spreadsheet,
+            "code_exec":    self.valves.model_code_exec,
+            "fact_checker": self.valves.model_fact_checker,
+            "audio":        self.valves.model_audio,
             # Paramètres Pollinations transmis aux agents via le dict models
             "_pollinations": {
-                "enable":  self.valves.enable_image_gen,
-                "api_key": self.valves.pollinations_api_key,
-                "model":   self.valves.pollinations_model,
-                "width":   self.valves.pollinations_width,
-                "height":  self.valves.pollinations_height,
-                "enhance": self.valves.pollinations_enhance,
+                "enable":   self.valves.enable_image_gen,
+                "provider": self.valves.image_gen_provider,
+                "api_key":  self.valves.pollinations_api_key,
+                "model":    self.valves.pollinations_model,
+                "width":    self.valves.pollinations_width,
+                "height":   self.valves.pollinations_height,
+                "enhance":  self.valves.pollinations_enhance,
             },
         }
         self._graph, self._pool = self._run_sync(build_graph(self.valves.db_url, models))
         self._models = models
+
+        # Pré-chauffe les modèles utilisés (best-effort, non bloquant).
+        if self.valves.enable_prewarming:
+            try:
+                from tools.perf import warm_up_all
+                # On ne pré-chauffe que les modèles textuels (skip _pollinations / image_gen)
+                model_set = {v for k, v in models.items() if isinstance(v, str) and not k.startswith("_")}
+                asyncio.run_coroutine_threadsafe(warm_up_all(model_set), self._loop)
+            except Exception:
+                pass
         return self._graph
 
     def pipe(
@@ -597,7 +704,15 @@ class Pipeline:
         # 1. Préparer l'état initial
         lc_messages = _convert_messages(messages)
         images_b64 = _extract_images_b64(messages)
+        audios_b64 = _extract_audios_b64(messages)
         user_valves = _extract_user_valves(body)
+
+        # Propager les valves writer_reference_* aux env vars que writer.py lit.
+        # Process-wide mais sans race (le chemin est constant, juste lu par pypandoc).
+        if self.valves.writer_reference_docx:
+            os.environ["ALYX_WRITER_REFERENCE_DOCX"] = self.valves.writer_reference_docx
+        if self.valves.writer_reference_pptx:
+            os.environ["ALYX_WRITER_REFERENCE_PPTX"] = self.valves.writer_reference_pptx
 
         # Date courante injectée dans l'état — lisible par tous les agents
         current_date = datetime.now().strftime("%A %d %B %Y").lower()
@@ -615,20 +730,23 @@ class Pipeline:
         initial_state = {
             "messages": lc_messages,
             "images_b64": images_b64,
+            "audios_b64": audios_b64,
             "current_date": current_date,
             "routing": [],
             "routing_next": [],
             "routing_phase1": [],
             "agent_outputs": {},
+            "agent_confidence": {},
             "agent_metrics": {},
             "artifacts": [],
             "_pollinations": {
-                "enable":  self.valves.enable_image_gen,
-                "api_key": self.valves.pollinations_api_key,
-                "model":   self.valves.pollinations_model,
-                "width":   self.valves.pollinations_width,
-                "height":  self.valves.pollinations_height,
-                "enhance": self.valves.pollinations_enhance,
+                "enable":   self.valves.enable_image_gen,
+                "provider": self.valves.image_gen_provider,
+                "api_key":  self.valves.pollinations_api_key,
+                "model":    self.valves.pollinations_model,
+                "width":    self.valves.pollinations_width,
+                "height":   self.valves.pollinations_height,
+                "enhance":  self.valves.pollinations_enhance,
             },
             # Isolation multi-tenant du RAG : on transmet l'identité + les
             # ressources autorisées par OpenWebUI pour ce chat. L'agent rag s'en
@@ -735,18 +853,40 @@ class Pipeline:
         is_mistral = "mistral" in eff_alyx_model.lower()
         extra_body: dict = {} if (model_reasoning_enabled or is_mistral) else {"enable_thinking": False}
         try:
-            # ── Cache Redis : court-circuite le graphe pour les requêtes
-            # déterministes déjà vues (agents non temps-réel, sans artifact). ──
+            # ── Cache exact (Redis) puis cache sémantique (Qdrant) ────────
             cache_hit = False
             cache_key = None
-            if self.valves.enable_agent_cache:
-                from tools import cache as _agent_cache
+            embedding: list | None = None
+            from tools import cache as _agent_cache
+            if self.valves.enable_agent_cache or self.valves.enable_semantic_cache:
                 cache_key = _agent_cache.cache_key(user_message)
-                cached = await _agent_cache.get(self.valves.redis_url, cache_key)
-                if cached:
-                    await _emit("⚡ Réponse depuis le cache")
-                    agent_outputs, artifacts, agent_metrics = cached, [], {}
-                    cache_hit = True
+                # 1. Exact match (Redis) — moins cher, à essayer en premier
+                if self.valves.enable_agent_cache:
+                    cached = await _agent_cache.get(self.valves.redis_url, cache_key)
+                    if cached:
+                        await _emit("⚡ Réponse depuis le cache (exact)")
+                        agent_outputs, artifacts, agent_metrics = cached, [], {}
+                        cache_hit = True
+                # 2. Cache sémantique (Qdrant) si exact a miss
+                if not cache_hit and self.valves.enable_semantic_cache:
+                    embedding = await _agent_cache._embed(
+                        user_message,
+                        embed_url=os.environ.get("LITELLM_URL", "http://litellm:4000/v1"),
+                        embed_model=os.environ.get("RAG_EMBEDDING_MODEL", "openrouter/embedding"),
+                        api_key=os.environ.get("LITELLM_API_KEY", ""),
+                    )
+                    if embedding:
+                        cached = await _agent_cache.semantic_get(
+                            qdrant_url=os.environ.get("QDRANT_URI", "http://qdrant:6333"),
+                            qdrant_api_key=os.environ.get("QDRANT_API_KEY", ""),
+                            collection=self.valves.semantic_cache_collection,
+                            embedding=embedding,
+                            threshold=self.valves.semantic_cache_threshold,
+                        )
+                        if cached:
+                            await _emit("⚡ Réponse depuis le cache (sémantique)")
+                            agent_outputs, artifacts, agent_metrics = cached, [], {}
+                            cache_hit = True
 
             if not cache_hit:
                 await _emit("🧭 Routage de la demande…")
@@ -754,13 +894,23 @@ class Pipeline:
                 agent_outputs, artifacts, agent_metrics = await self._run_graph(
                     graph, initial_state, config, event_emitter, models=models,
                     max_phases=self.valves.max_phases,
+                    memory_always_on=self.valves.memory_always_on,
+                    enable_critic_loop=self.valves.enable_critic_loop,
                 )
-                # Mémoriser si le tour est sûr à cacher (déterministe, sans artifact/erreur)
-                if (self.valves.enable_agent_cache and cache_key
-                        and _agent_cache.is_cacheable(agent_outputs, artifacts)):
-                    await _agent_cache.store(
-                        self.valves.redis_url, cache_key, agent_outputs, self.valves.agent_cache_ttl
-                    )
+                # Mémoriser si le tour est sûr à cacher
+                if cache_key and _agent_cache.is_cacheable(agent_outputs, artifacts):
+                    if self.valves.enable_agent_cache:
+                        await _agent_cache.store(
+                            self.valves.redis_url, cache_key, agent_outputs, self.valves.agent_cache_ttl
+                        )
+                    if self.valves.enable_semantic_cache and embedding:
+                        await _agent_cache.semantic_store(
+                            qdrant_url=os.environ.get("QDRANT_URI", "http://qdrant:6333"),
+                            qdrant_api_key=os.environ.get("QDRANT_API_KEY", ""),
+                            collection=self.valves.semantic_cache_collection,
+                            embedding=embedding,
+                            agent_outputs=agent_outputs,
+                        )
             if reasoning_emitter and self.valves.show_reasoning:
                 await reasoning_emitter("", True)
 
@@ -866,14 +1016,50 @@ class Pipeline:
             # reproduire le code (évite le doublon inline + panneau).
             if self.valves.embed_html_inline:
                 all_embeds: list[str] = []
-                for _html_agent in ("dev", "presenter"):
+                for _html_agent in ("dev", "presenter", "mindmap", "diagram"):
                     if agent_outputs.get(_html_agent):
                         embeds_found, cleaned = _extract_html_embeds(agent_outputs[_html_agent])
                         if embeds_found:
                             agent_outputs[_html_agent] = cleaned
                             all_embeds.extend(embeds_found)
+                            # Persistance : on push chaque embed comme artifact
+                            # document, pour qu'il apparaisse en lien de
+                            # téléchargement (data-URI ou natif selon valves).
+                            if self.valves.persist_html_artifacts:
+                                import uuid as _uuid
+                                for emb_html in embeds_found:
+                                    title_match = re.search(r"<title>(.*?)</title>", emb_html, re.IGNORECASE | re.DOTALL)
+                                    label = (title_match.group(1).strip() if title_match else _html_agent)[:40]
+                                    safe_label = re.sub(r"[^\w-]", "_", label).strip("_") or _html_agent
+                                    fname = f"{safe_label}-{_uuid.uuid4().hex[:8]}.html"
+                                    artifacts.append({
+                                        "type": "document",
+                                        "format": "html",
+                                        "filename": fname,
+                                        "mime": "text/html",
+                                        "base64": base64.b64encode(emb_html.encode("utf-8")).decode("ascii"),
+                                        "size_label": f"{len(emb_html) // 1024} KB" if len(emb_html) >= 1024 else f"{len(emb_html)} B",
+                                    })
                 if all_embeds:
                     await _emit_html_embeds(event_emitter, all_embeds)
+
+            # ── Context compression : si la somme des outputs dépasse le seuil,
+            # on compresse via un LLM cheap pour réduire le coût de synthèse. ──
+            if self.valves.enable_context_compression:
+                from tools.perf import compress_agent_outputs
+                agent_outputs = await compress_agent_outputs(
+                    agent_outputs,
+                    target_max_chars=self.valves.context_compression_target,
+                )
+
+            # ── Model autoselect : pour les requêtes triviales, bascule sur
+            # le modèle cheap pour ne pas brûler du compute pour rien. ──
+            if self.valves.enable_model_autoselect:
+                from tools.perf import select_model_by_complexity
+                eff_alyx_model = select_model_by_complexity(
+                    user_message, eff_alyx_model,
+                    cheap_model=self.valves.supervisor_model,
+                )
 
             await _emit("✍️ Rédaction de la réponse…")
             synthesis_context = _build_synthesis_context(agent_outputs, artifacts)
@@ -954,6 +1140,12 @@ class Pipeline:
                     show_perf_stats=eff_show_perf,
                 )
                 q.put(f"\n\n---\n*{footer}*")
+
+            # Diagramme d'exécution (debug / transparence) — caché par défaut.
+            if self.valves.emit_execution_graph:
+                graph_md = _build_execution_graph(agent_metrics, elapsed=elapsed)
+                if graph_md:
+                    q.put(graph_md)
 
         except Exception as exc:
             await _emit("Erreur lors de l'exécution", done=True)
@@ -1140,7 +1332,9 @@ class Pipeline:
 
     @staticmethod
     async def _run_graph(graph, initial_state: dict, config: dict, event_emitter=None,
-                         models: dict | None = None, max_phases: int = 2):
+                         models: dict | None = None, max_phases: int = 2,
+                         memory_always_on: bool = True,
+                         enable_critic_loop: bool = False):
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
         agent_metrics: dict[str, dict] = {}
@@ -1171,6 +1365,14 @@ class Pipeline:
                     if isinstance(out_text, str) and out_text.startswith(("⚠️", "⏱️")):
                         await _emit_notification(event_emitter, "warning", f"{icon} : {out_text[:120]}")
 
+        # ── Memory always-on : lecture mémoire en parallèle de phase 1, sans
+        # bloquer le supervisor. Si supervisor route déjà memory, on skippe pour
+        # éviter le double appel. Coût : ~1s parallèle, gain UX significatif
+        # (personnalisation transparente sans demander à l'utilisateur·rice). ──
+        always_on_memory_task = None
+        # Note : on lance APRÈS le premier event astream pour connaître routing
+        # — fait via un setup différé ci-dessous.
+
         # ── Phase 1 : exécution du graphe LangGraph ────────────────────────────
         async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
             for node_name, node_output in event.items():
@@ -1184,8 +1386,53 @@ class Pipeline:
                             await _emit(f"Phase 1 · {labels}")
                         else:
                             await _emit(f"Invocation des agents : {labels}")
+                    # Memory always-on : lancer en parallèle de phase 1 si pas
+                    # déjà routé par le supervisor (évite le double appel).
+                    if memory_always_on and "memory" not in routing and "memory" not in (routing_next or []):
+                        import agents.memory_agent as _memory_mod
+                        always_on_memory_task = asyncio.create_task(
+                            _memory_mod.run(initial_state, config=config,
+                                            model=(models or {}).get("memory"))
+                        )
                     continue
                 await _handle_agent_output(node_name, node_output)
+
+        # ── Critic loop : vérification adversariale post-phase 1 ──────────────
+        # Lance fact_checker SI valve activée ET pas déjà routé. Le résultat
+        # rejoint agent_outputs comme tout autre agent — la synthèse Alyx le
+        # voit et pondère ses claims en conséquence.
+        if (enable_critic_loop and agent_outputs
+                and "fact_checker" not in agent_outputs):
+            import agents.fact_checker as _fc_mod
+            try:
+                await _emit("🔬 Vérification adversariale…")
+                fc_state = {**initial_state, "agent_outputs": dict(agent_outputs)}
+                fc_result = await asyncio.wait_for(
+                    _fc_mod.run(fc_state, config=config, model=(models or {}).get("fact_checker")),
+                    timeout=45.0,
+                )
+                if isinstance(fc_result, dict):
+                    agent_outputs.update(fc_result.get("agent_outputs", {}))
+                    agent_metrics.update(fc_result.get("agent_metrics", {}))
+            except (asyncio.TimeoutError, Exception):
+                pass  # best-effort
+
+        # ── Récupération de la memory lue en parallèle (always-on) ────────────
+        if always_on_memory_task is not None:
+            try:
+                mem_result = await asyncio.wait_for(always_on_memory_task, timeout=15.0)
+                if isinstance(mem_result, dict):
+                    mem_text = (mem_result.get("agent_outputs") or {}).get("memory", "")
+                    if mem_text:
+                        agent_outputs["memory"] = mem_text
+                    if "agent_metrics" in mem_result:
+                        agent_metrics.update(mem_result["agent_metrics"])
+                    if "agent_confidence" in mem_result:
+                        # On ne tracke pas encore agent_confidence dans _run_graph,
+                        # mais on logue côté output pour usage futur
+                        pass
+            except (asyncio.TimeoutError, Exception):
+                pass  # Memory always-on est best-effort : pas d'erreur bloquante
 
         # ── Phases séquentielles 2..max_phases ─────────────────────────────────
         # Chaque phase reçoit agent_outputs/artifacts des phases précédentes.
@@ -1569,6 +1816,39 @@ def _extract_citations(agent_outputs: dict[str, str]) -> list[dict]:
                     return results
 
     return results
+
+
+def _build_execution_graph(agent_metrics: dict, agent_confidence: dict | None = None,
+                           elapsed: float | None = None) -> str:
+    """Construit un mini-diagramme mermaid récapitulant les agents exécutés ce tour.
+
+    Format : flowchart compact avec, pour chaque agent, modèle utilisé + tokens.
+    Utile en debug / transparence — caché par défaut (valve `emit_execution_graph`).
+    """
+    if not agent_metrics:
+        return ""
+    confs = agent_confidence or {}
+    lines = ["```mermaid", "flowchart LR", "    U([User]) --> S[Supervisor]"]
+    edges = []
+    for i, (agent, m) in enumerate(agent_metrics.items()):
+        if agent.startswith("_"):  # _synthesis etc.
+            continue
+        node_id = f"A{i}"
+        model = m.get("model", "?").split("/")[-1]
+        toks = (m.get("prompt_tokens", 0) or 0) + (m.get("completion_tokens", 0) or 0)
+        conf = confs.get(agent)
+        conf_str = f" [{conf:.2f}]" if isinstance(conf, (int, float)) else ""
+        label = f"{agent}<br/>{model}<br/>~{toks // 100 / 10}k tok{conf_str}"
+        lines.append(f"    {node_id}[\"{label}\"]")
+        edges.append(f"    S --> {node_id}")
+    lines.extend(edges)
+    lines.append("    A0 -.-> SY[Alyx Synthèse]")
+    if elapsed:
+        lines.append(f"    SY --> F([Final · {elapsed:.1f}s])")
+    else:
+        lines.append("    SY --> F([Final])")
+    lines.append("```")
+    return "\n\n<details><summary>📊 Graphe d'exécution du tour</summary>\n\n" + "\n".join(lines) + "\n\n</details>"
 
 
 async def _emit_chat_meta(event_emitter, user_message: str) -> None:

@@ -235,14 +235,23 @@ Le supervisor, dans [sub_agents/graph/supervisor.py](sub_agents/graph/supervisor
 
 - `dev` : génération d’artifacts HTML, JS ou Python, appuyée par les skills locaux et Context7.
 - `presenter` : génération de présentations reveal.js auto-contenues (slides, pitch decks).
+- `mindmap` : cartes mentales markmap.js (artifact inline).
+- `diagram` : diagrammes auto-routés vers mermaid / vis-network / excalidraw / jointjs selon le type demandé.
 - `data` : calculs, DuckDB et données financières Yahoo Finance.
+- `code_exec` : **exécution réelle** de Python dans le conteneur sandbox `open-terminal`.
+- `spreadsheet` : production de XLSX multi-feuilles via openpyxl (téléchargeable).
+- `translator` : traduction d'un texte / bloc de code vers une langue cible (fr/en/es/de/it/pt/nl/ru/zh/ja/ar).
+- `summarizer` : résumé d'URL, document ou texte long en TL;DR + key points + open questions.
+- `vision` : OCR poussé, extraction de données de graphiques, lecture de diagrammes (LLM vision via LiteLLM).
+- `audio` : transcription d'audio attaché via Whisper local (scaffold, nécessite un service Whisper dans le compose).
 - `geo` : géocodage OSM et météo Open-Meteo.
-- `image_gen` : génération d’image via Pollinations.
+- `image_gen` : génération d’image multi-provider (Pollinations.ai par défaut, ou DALL-E/SD via LiteLLM).
 
 ### Agents de contexte et analyse
 
-- `memory` : rappel mémoire utilisateur et condensation asynchrone.
-- `reasoning` : décomposition analytique à l’aide de `sequential-thinking`.
+- `memory` : rappel mémoire utilisateur (knowledge graph + **vector memory Qdrant**) et condensation asynchrone. Peut tourner en **always-on background** parallèle de phase 1 (valve `memory_always_on`).
+- `reasoning` : décomposition analytique parallèle (steps en `asyncio.gather`) via `sequential-thinking`.
+- `fact_checker` : vérification adversariale des claims (web search + LLM critic). Auto-wired après phase 1 via valve `enable_critic_loop`.
 
 ## Workflows
 
@@ -439,6 +448,40 @@ Valve `enable_agent_cache` (défaut off) : met en cache (Redis DB 2) les sorties
 des agents *déterministes uniquement* — la denylist exclut systématiquement
 `web`, `geo`, `data`, `image_gen`, `media`, `rag`, `memory` ainsi que tout tour
 produisant des artifacts ou des erreurs. TTL configurable via `agent_cache_ttl`.
+
+### Cache sémantique (Qdrant)
+
+Complémentaire au cache exact. Valve `enable_semantic_cache` (défaut off) :
+stocke (embedding du message, agent_outputs) dans une collection Qdrant dédiée
+(`alyx_semantic_cache`). À la requête suivante, si une question sémantiquement
+proche (similarité cosinus ≥ `semantic_cache_threshold`, défaut 0.92) a déjà
+été traitée, on réutilise la réponse cachée. Permet de mutualiser entre
+formulations différentes d'une même intention.
+
+## Optimisations LLM
+
+| Valve | Effet |
+|---|---|
+| `enable_context_compression` | Avant synthèse, compresse via LLM cheap les outputs > 2000 chars. Gain coût synthèse 20-40%. |
+| `enable_model_autoselect` | Bascule sur `supervisor_model` (cheap) pour les requêtes triviales (salutations, accusés). |
+| `enable_prewarming` | Pré-chauffe les connexions LiteLLM au build du graphe. Réduit la latence du premier tour. |
+| `memory_always_on` | Lit la mémoire en parallèle de phase 1 sans surcoût UX. Personnalisation transparente. |
+| `enable_critic_loop` | Pass adversarial post-phase 1 via fact_checker. Coût ~3-5s, gain qualité radical. |
+
+## Persistance des artifacts
+
+Valve `persist_html_artifacts` (défaut on) : chaque artifact HTML produit par
+`dev`/`presenter`/`mindmap`/`diagram` est SIMULTANÉMENT rendu en iframe inline
+(via `embeds`) ET converti en fichier `.html` téléchargeable (lien data-URI ou
+pièce jointe native selon la config `enable_native_file_attachments`). Plus
+besoin de copier-coller le code source de l'artifact.
+
+## Templates de référence writer
+
+Valves `writer_reference_docx` / `writer_reference_pptx` : chemin (dans le
+conteneur) vers un template `.docx` ou `.pptx` de marque. Passé à pandoc via
+`--reference-doc`. Permet de brander les sorties writer (logo, palette, polices)
+sans toucher au code.
 
 ## Limitations connues
 

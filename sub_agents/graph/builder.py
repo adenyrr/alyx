@@ -35,21 +35,39 @@ import agents.rag_agent as rag_agent
 import agents.reasoning as reasoning_agent
 import agents.writer as writer_agent
 import agents.presenter as presenter_agent
+import agents.translator as translator_agent
+import agents.summarizer as summarizer_agent
+import agents.vision as vision_agent
+import agents.mindmap as mindmap_agent
+import agents.diagram as diagram_agent
+import agents.spreadsheet as spreadsheet_agent
+import agents.code_exec as code_exec_agent
+import agents.fact_checker as fact_checker_agent
+import agents.audio as audio_agent
 
 _AGENT_MAP: dict[str, Callable] = {
-    "wikipedia": wikipedia_agent.run,
-    "web":       web_agent.run,
-    "doc":       doc_agent.run,
-    "geo":       geo_agent.run,
-    "dev":       dev_agent.run,
-    "media":     media_agent.run,
-    "data":      data_agent.run,
-    "memory":    memory_mod.run,
-    "image_gen": image_gen_agent.run,
-    "rag":       rag_agent.run,
-    "reasoning": reasoning_agent.run,
-    "writer":    writer_agent.run,
-    "presenter": presenter_agent.run,
+    "wikipedia":    wikipedia_agent.run,
+    "web":          web_agent.run,
+    "doc":          doc_agent.run,
+    "geo":          geo_agent.run,
+    "dev":          dev_agent.run,
+    "media":        media_agent.run,
+    "data":         data_agent.run,
+    "memory":       memory_mod.run,
+    "image_gen":    image_gen_agent.run,
+    "rag":          rag_agent.run,
+    "reasoning":    reasoning_agent.run,
+    "writer":       writer_agent.run,
+    "presenter":    presenter_agent.run,
+    "translator":   translator_agent.run,
+    "summarizer":   summarizer_agent.run,
+    "vision":       vision_agent.run,
+    "mindmap":      mindmap_agent.run,
+    "diagram":      diagram_agent.run,
+    "spreadsheet":  spreadsheet_agent.run,
+    "code_exec":    code_exec_agent.run,
+    "fact_checker": fact_checker_agent.run,
+    "audio":        audio_agent.run,
 }
 
 # Timeouts individuels en secondes (par défaut 45 s)
@@ -58,11 +76,20 @@ _AGENT_TIMEOUTS: dict[str, int] = {
     "doc":       90,   # sci-hub + requêtes académiques
     "media":     90,   # transcription YouTube
     "image_gen": 130,  # Pollinations.ai (timeout interne 120 s)
-    "writer":    90,   # rédaction longue + conversion pandoc éventuelle
-    "presenter": 75,   # génération deck reveal.js + Context7
-    "dev":       60,   # Context7 + terminal
-    "web":       50,   # DuckDuckGo + fetch multiple URLs
-    "wikipedia": 50,
+    "writer":       90,   # rédaction longue + conversion pandoc éventuelle
+    "presenter":    75,   # génération deck reveal.js + Context7
+    "dev":          60,   # Context7 + terminal
+    "web":          50,   # DuckDuckGo + fetch multiple URLs
+    "wikipedia":    50,
+    "fact_checker": 60,   # extraction claims + N recherches web + N verify LLM
+    "code_exec":    60,   # script Python via open-terminal (réseaux + calculs)
+    "vision":       45,   # LLM vision (modèle plus lent)
+    "audio":        120,  # transcription whisper (peut être long)
+    "spreadsheet":  45,   # LLM + openpyxl
+    "summarizer":   45,   # fetch URL + résumé
+    "translator":   30,   # LLM seul, rapide
+    "mindmap":      45,   # LLM + skill markmap
+    "diagram":      45,   # LLM + skill mermaid/jointjs/excalidraw
 }
 _DEFAULT_AGENT_TIMEOUT = 45
 

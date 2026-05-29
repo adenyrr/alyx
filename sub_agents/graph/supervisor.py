@@ -36,6 +36,8 @@ _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 _VALID_AGENTS = {
     "wikipedia", "web", "doc", "dev", "media",
     "data", "geo", "memory", "image_gen", "rag", "reasoning", "writer", "presenter",
+    "translator", "summarizer", "vision", "mindmap", "diagram",
+    "spreadsheet", "code_exec", "fact_checker", "audio",
 }
 
 _SYSTEM = """\
@@ -72,6 +74,34 @@ Given the user's last message, output ONLY a JSON array of agent names to invoke
                   Produces a self-contained reveal.js artifact. Use presenter (not dev) whenever
                   the deliverable is a multi-slide presentation. NOT for single charts/dashboards
                   (use dev), NOT for long-form prose documents (use writer).
+  "translator" → translate a quoted text / code block / paragraph from/to a target language.
+                  Triggers: "traduis", "translate", "traducción", "übersetze", "en anglais",
+                  "to French", "in Spanish", etc. NOT for general multilingual answers
+                  (Alyx already replies in the user's language).
+  "summarizer" → summarize a URL, an inline long text, or an uploaded document.
+                  Triggers: "résume", "summarize", "TL;DR", "fais-moi un résumé de…".
+                  Use over web/doc when the goal is condensation, not retrieval.
+  "vision"     → in-depth image analysis: OCR, chart reading (extract data),
+                  diagram interpretation, object counting, document structure. Use when
+                  an image is attached AND the user explicitly asks for analysis beyond
+                  what Alyx's native vision can do (e.g. "extract the data from this chart").
+  "mindmap"    → mind maps (markmap.js) — hierarchical tree of ideas/concepts.
+                  Triggers: "carte mentale", "mindmap", "mind map", "arbre conceptuel".
+  "diagram"    → diagrams: flowchart, sequence, class, ER, state machine, network topology,
+                  whiteboard sketches. Auto-picks mermaid/jointjs/excalidraw based on type.
+                  Triggers: "diagramme", "flowchart", "schéma", "UML", "BPMN", "topology".
+  "spreadsheet" → produce a downloadable XLSX file (multi-sheet, headers, data).
+                  Triggers: ".xlsx", "Excel", "tableur", "feuille de calcul", "spreadsheet".
+                  Use spreadsheet (not data) when the user wants a FILE, not an inline table.
+  "code_exec"  → ACTUAL Python execution (not just describing the algorithm).
+                  Triggers: "exécute", "run this", "compute", "what's the result of",
+                  any task requiring real computation. Sandbox via open-terminal.
+                  Use over data when real computation is required, not just a description.
+  "fact_checker" → adversarial verification of claims (web search + LLM critic). RARELY
+                  invoked directly by the user — usually auto-wired via the critic loop
+                  valve. User trigger: "vérifie ces affirmations", "fact-check".
+  "audio"      → transcription of attached audio files (requires Whisper service).
+                  Auto-invoked when audios_b64 is present in the state.
 
 ═══════════════════════════════════════════════════════
  ROUTING RULES
@@ -91,7 +121,9 @@ RULE 3 — IMAGES ATTACHED:
   Alyx handles vision natively. Do NOT add any agent for image analysis.
   Still route other intents normally.
 
-RULE 4 — MAX 3 agents per turn (wikipedia + web = 2, leaves room for 1 more if truly needed).
+RULE 4 — MAX 4 agents per turn. Default to ≤ 3, but allow 4 for genuinely composed
+  queries (e.g. "actualités + études + visualisation" → ["web","wikipedia","doc","dev"]).
+  Use the 4th slot ONLY when each agent brings distinct value the others can't supply.
 
 RULE 5 — SCIENTIFIC vs WEB:
   "doc" for peer-reviewed research, medical evidence, academic papers.
@@ -105,10 +137,14 @@ RULE 6 — FINANCIAL DATA:
 RULE 7 — WEATHER/GEO:
   Any weather, temperature, climate, map, location data → "geo".
 
-RULE 8 — DEV + WEB:
-  Agents run IN PARALLEL. If dev needs web's output → use "web"+"wikipedia" first.
-  On the NEXT turn, "dev" alone can build the artifact from conversation data.
-  Only combine ["dev", "wikipedia", "web"] when tasks are truly independent.
+RULE 8 — DEV depends on data sourced by another agent:
+  Use the SEQUENTIAL workflow (routing + routing_next) — NEVER ask the user to split
+  into two manual turns. Pattern:
+    {"routing": ["web","wikipedia"], "routing_next": ["dev"]}
+    {"routing": ["data"],            "routing_next": ["dev"]}
+    {"routing": ["geo"],             "routing_next": ["dev"]}
+  Only put dev in `routing` (parallel) when its work is independent of other agents
+  in the same phase (e.g. "écris un script python" → ["dev"] alone).
 
 RULE 9 — REASONING:
   Use "reasoning" ONLY for genuinely complex analytical questions requiring structured
@@ -237,6 +273,22 @@ RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "Fais-moi une présentation pptx avec des données fictives" → ["presenter", "writer"]
   "Pitch deck pptx sur ma startup SaaS" → ["presenter", "writer"]
   "Recherche les chiffres du marché EV 2024 et fais-en un pptx" → {"routing": ["web", "wikipedia"], "routing_next": ["presenter", "writer"]}
+  "Traduis ce texte en anglais : « ... »" → ["translator"]
+  "Résume cet article : https://example.com/long-post" → ["summarizer"]
+  "Résume mon PDF importé" → ["summarizer"]
+  "Extrais les données de ce graphique [image jointe]" → ["vision"]
+  "OCR ce document [image jointe]" → ["vision"]
+  "Carte mentale de la révolution française" → ["mindmap"]
+  "Flowchart du process de commande" → ["diagram"]
+  "Diagramme de séquence login OAuth" → ["diagram"]
+  "Topologie réseau d'un Kubernetes cluster" → ["diagram"]
+  "Génère un .xlsx avec 3 feuilles : ventes, marges, prévisions" → ["spreadsheet"]
+  "Calcule la moyenne de [1, 2, 3, ..., 100] et exécute le code" → ["code_exec"]
+  "Combien font 234 * 567 ? Calcule réellement" → ["code_exec"]
+  "Vérifie les affirmations de mon dernier message" → ["fact_checker"]
+  "Transcris cet audio [audio joint]" → ["audio"]
+  "Récupère les données du marché EV et fais-en un tableau Excel" → {"routing": ["web", "wikipedia"], "routing_next": ["spreadsheet"]}
+  "Compile une mindmap des concepts de ce papier scientifique" → {"routing": ["doc"], "routing_next": ["mindmap"]}
 """
 
 
@@ -289,8 +341,10 @@ async def route(state: "AlyxState", model: str | None = None) -> "AlyxState":
             if arr_match:
                 agents = json.loads(arr_match.group(0))
 
-        agents = [a for a in agents if a in _VALID_AGENTS][:3]
-        routing_next = [a for a in routing_next if a in _VALID_AGENTS and a not in agents][:2]
+        # Cap aligné avec RULE 4 (max 4 agents par phase). routing_next plafonné à 3
+        # car les workflows composés (e.g. presenter+writer+fact_checker) en bénéficient.
+        agents = [a for a in agents if a in _VALID_AGENTS][:4]
+        routing_next = [a for a in routing_next if a in _VALID_AGENTS and a not in agents][:3]
     except Exception:
         agents = []
         routing_next = []
