@@ -28,6 +28,8 @@ from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 from tools.playwright_client import fetch_url as playwright_fetch
+from tools.text_utils import extract_query_variants
+from tools.quality import source_diversity_score, _root_domain
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -123,23 +125,49 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             f"<untrusted_content source=\"{explicit_url}\">\n{content}\n</untrusted_content>"
         )
     else:
-        # 2. Recherche DuckDuckGo
+        # 2. Recherche DuckDuckGo — éventuellement avec QUERY EXPANSION
+        # (plusieurs variantes en parallèle pour maximiser la diversité des
+        # domaines récupérés et réduire le risque d'hallucination chambre-d'écho).
         try:
-            await _emit(f"🔎 Recherche web : {keywords}")
-            ddg_result = await call_tool("duckduckgo", "search", {
-                "query": keywords,
-                "max_results": ddg_max,
-            })
-            ddg_raw = json.dumps(ddg_result, ensure_ascii=False, indent=2)
-            context_parts.append(
-                f"## Résultats DuckDuckGo ({keywords!r})\n"
-                f"<untrusted_content source=\"duckduckgo:{keywords!r}\">\n{ddg_raw[:3000]}\n</untrusted_content>"
+            use_qe = bool(limits.get("enable_query_expansion", False))
+            if use_qe:
+                variants = await extract_query_variants(user_text, n=3)
+                await _emit(f"🔎 Recherche web (×{len(variants)} variantes) : {', '.join(v[:30] for v in variants)}")
+            else:
+                variants = [keywords]
+                await _emit(f"🔎 Recherche web : {keywords}")
+
+            # Lancer toutes les variantes en parallèle
+            ddg_results = await asyncio.gather(
+                *(call_tool("duckduckgo", "search", {"query": v, "max_results": ddg_max}) for v in variants),
+                return_exceptions=True,
             )
 
-            # 3. Visiter les N premières URLs EN PARALLÈLE (N = valve sources_web_fetch)
-            urls = _extract_urls_from_ddg(ddg_result)[:fetch_count]
+            # Agréger les résultats : dédupliquer par URL, garder l'ordre, contexter
+            seen_urls: set[str] = set()
+            merged_urls: list[str] = []
+            for variant, ddg_result in zip(variants, ddg_results):
+                if isinstance(ddg_result, BaseException):
+                    context_parts.append(f"## DuckDuckGo ({variant!r}) indisponible\n{ddg_result}")
+                    continue
+                ddg_raw = json.dumps(ddg_result, ensure_ascii=False, indent=2)
+                context_parts.append(
+                    f"## Résultats DuckDuckGo ({variant!r})\n"
+                    f"<untrusted_content source=\"duckduckgo:{variant!r}\">\n{ddg_raw[:3000]}\n</untrusted_content>"
+                )
+                for u in _extract_urls_from_ddg(ddg_result):
+                    if u not in seen_urls:
+                        seen_urls.add(u)
+                        merged_urls.append(u)
+
+            # 3. Sélection des URLs à fetcher : priorité aux DOMAINES DIVERSIFIÉS.
+            # On garde au plus 1 URL par domaine racine jusqu'à atteindre fetch_count,
+            # ce qui empêche 5 URLs du même site (chambre d'écho).
+            urls = _diversify_urls(merged_urls, fetch_count)
             if urls:
-                await _emit(f"📄 Lecture parallèle de {len(urls)} source(s) web…")
+                from urllib.parse import urlparse as _urlparse
+                n_domains = len({_root_domain((_urlparse(u).hostname or "").lower()) for u in urls})
+                await _emit(f"📄 Lecture parallèle de {len(urls)} source(s) ({n_domains} domaines distincts)…")
                 fetched = await asyncio.gather(
                     *(_fetch_url_with_fallback(u, truncate_chars, enable_playwright) for u in urls),
                     return_exceptions=True,
@@ -151,8 +179,13 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
                         f"## Contenu de {url}\n"
                         f"<untrusted_content source=\"{url}\">\n{content}\n</untrusted_content>"
                     )
+
+            # Diversity-based confidence : reflète si les sources couvrent
+            # plusieurs domaines/tiers (= moins de chambre d'écho).
+            diversity = source_diversity_score(urls)
         except Exception as exc:
             context_parts.append(f"## DuckDuckGo indisponible\n{exc}")
+            diversity = 0.0
 
     if current_date:
         context_parts.insert(0, f"## Date actuelle : {current_date}")
@@ -168,14 +201,45 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     _u = getattr(response, "usage_metadata", None) or {}
     _prompt_tokens += _u.get("input_tokens", 0) or 0
     _completion_tokens += _u.get("output_tokens", 0) or 0
+    # Confidence = base 0.65 (web brut) + boost diversité si plusieurs domaines.
+    # Pour les requêtes avec URL explicite, on n'a pas calculé `diversity` → 0.7 par défaut.
+    base_conf = 0.7 if explicit_url else (0.55 + 0.3 * locals().get("diversity", 0.0))
     return {
         "agent_outputs": {"web": response.content},
+        "agent_confidence": {"web": round(min(0.95, base_conf), 2)},
         "agent_metrics": {"web": {
             "prompt_tokens": _prompt_tokens,
             "completion_tokens": _completion_tokens,
             "model": model or _MODEL,
         }},
     }
+
+
+def _diversify_urls(urls: list[str], target_count: int) -> list[str]:
+    """Sélectionne au plus `target_count` URLs en favorisant la diversité des
+    domaines racine. Si moins de N domaines distincts dispo, on prend ce qu'il y a.
+    """
+    from urllib.parse import urlparse
+    selected: list[str] = []
+    seen_domains: set[str] = set()
+    for u in urls:
+        try:
+            host = (urlparse(u).hostname or "").lower()
+        except Exception:
+            continue
+        domain = _root_domain(host)
+        if domain and domain not in seen_domains:
+            seen_domains.add(domain)
+            selected.append(u)
+            if len(selected) >= target_count:
+                return selected
+    # Si on n'a pas atteint le quota, on remplit avec ce qui reste (même domaine OK)
+    for u in urls:
+        if u not in selected:
+            selected.append(u)
+            if len(selected) >= target_count:
+                break
+    return selected
 
 
 def _extract_url(text: str) -> str:

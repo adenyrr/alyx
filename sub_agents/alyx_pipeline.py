@@ -1,7 +1,7 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.8.0
+version: 0.8.1
 requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, pypandoc-binary>=1.13, openpyxl>=3.1, openai>=1.0, pydantic>=2.0
 """
 
@@ -477,6 +477,11 @@ class Pipeline:
         auto_factcheck_high_stakes: bool = Field(default=True, description="Auto-déclenche fact_checker si la question contient des mots-clés à enjeux (santé / légal / financier / scientifique)")
         inject_confidence_in_synthesis: bool = Field(default=True, description="Passer le bloc de confiance par agent à la synthèse Alyx pour pondération des claims")
         enrich_citations_authority: bool = Field(default=True, description="Ajouter un badge d'autorité (🟢🟡🟠🔴) à chaque source citée selon la fiabilité du domaine")
+
+        # --- Multi-source : restauration de l'intention « plusieurs sources indépendantes » ---
+        auto_corroborate_single_source: bool = Field(default=True, description="Si UN SEUL agent factuel (web/wikipedia/doc) tourne en phase 1 ET (confiance < seuil OU question à enjeux), lance automatiquement son agent complémentaire pour avoir une seconde source indépendante")
+        corroboration_threshold: float = Field(default=0.75, ge=0.0, le=1.0, description="Confiance moyenne en dessous de laquelle l'auto-corroboration se déclenche (au-delà de la valve high_stakes)")
+        enable_query_expansion: bool = Field(default=False, description="Pour web/wikipedia/doc : génère 2-3 variantes de recherche (synonymes/sous-thèmes) lancées en parallèle pour diversifier les sources. Coût : 1 appel LLM cheap + N appels MCP supplémentaires.")
         writer_reference_docx: str = Field(default="", description="Chemin (dans le conteneur) vers un template DOCX de référence (--reference-doc) pour brander les sorties writer")
         writer_reference_pptx: str = Field(default="", description="Chemin vers un template PPTX de référence pour brander les sorties writer/presenter pptx")
         embed_html_inline: bool = Field(default=True, description="Rendre les artifacts HTML de l'agent dev en iframe inline (event `embeds` OpenWebUI) au lieu de blocs de code markdown (panneau Artifacts)")
@@ -771,6 +776,7 @@ class Pipeline:
                 "enable_scihub":              _coalesce(user_valves.get("enable_scihub"), self.valves.enable_scihub),
                 "enable_playwright_fallback": self.valves.enable_playwright_fallback,
                 "enable_writer_conversion":   self.valves.enable_writer_conversion,
+                "enable_query_expansion":     self.valves.enable_query_expansion,
                 "truncate_chars":     self.valves.truncate_external_content,
             },
         }
@@ -909,6 +915,8 @@ class Pipeline:
                     auto_factcheck_low_confidence=self.valves.auto_factcheck_low_confidence,
                     auto_factcheck_high_stakes=self.valves.auto_factcheck_high_stakes,
                     critic_confidence_threshold=self.valves.critic_confidence_threshold,
+                    auto_corroborate_single_source=self.valves.auto_corroborate_single_source,
+                    corroboration_threshold=self.valves.corroboration_threshold,
                 )
                 # Mémoriser si le tour est sûr à cacher
                 if cache_key and _agent_cache.is_cacheable(agent_outputs, artifacts):
@@ -1363,7 +1371,9 @@ class Pipeline:
                          enable_critic_loop: bool = False,
                          auto_factcheck_low_confidence: bool = True,
                          auto_factcheck_high_stakes: bool = True,
-                         critic_confidence_threshold: float = 0.6):
+                         critic_confidence_threshold: float = 0.6,
+                         auto_corroborate_single_source: bool = True,
+                         corroboration_threshold: float = 0.75):
         agent_outputs: dict[str, str] = {}
         agent_confidence: dict[str, float] = {}
         artifacts: list[dict] = []
@@ -1428,6 +1438,51 @@ class Pipeline:
                     continue
                 await _handle_agent_output(node_name, node_output)
 
+        user_text_for_check = _last_human_text(initial_state.get("messages", []))
+
+        # ── Auto-corroboration : RESTAURE l'intention « plusieurs sources »
+        # qui était imposée par l'ancien couplage rigide web+wikipedia. Si UN
+        # SEUL agent factuel a tourné (single-source = risque de chambre d'écho),
+        # ET soit la confiance est insuffisante soit la question est à enjeux,
+        # on spawn AUTOMATIQUEMENT l'agent complémentaire pour avoir une seconde
+        # source INDÉPENDANTE. C'est plus malin que le couplage fixe : on ne
+        # double-source QUE quand c'est utile. ──────────────────────────────
+        if auto_corroborate_single_source and agent_outputs:
+            from tools.quality import pick_complement_agent, avg_confidence, _HIGH_STAKES_RE
+            _FACTUAL = {"web", "wikipedia", "doc"}
+            factual_run = {a for a in agent_outputs if a in _FACTUAL}
+            avg_c = avg_confidence(agent_confidence) or 0.5
+            is_high_stakes = bool(_HIGH_STAKES_RE.search(user_text_for_check or ""))
+            need_corroborate = (avg_c < corroboration_threshold) or is_high_stakes
+            complement = pick_complement_agent(factual_run, set(agent_outputs))
+            if complement and need_corroborate and complement in _AGENT_MODULES:
+                reason = ("question à enjeux" if is_high_stakes
+                          else f"confiance moyenne {avg_c:.2f} < {corroboration_threshold}")
+                await _emit(f"🔄 Corroboration : {_AGENT_ICONS.get(complement, complement)} "
+                            f"(single-source détecté, {reason})")
+                try:
+                    mod = importlib.import_module(_AGENT_MODULES[complement])
+                    has_config = "config" in inspect.signature(mod.run).parameters
+                    m = (models or {}).get(complement)
+                    # Timeout dédié à la corroboration : 50s suffisent pour web/wiki
+                    # (les agents factuels supportés). On reste agressif côté timeout
+                    # car la corroboration ne doit pas étirer la latence du tour.
+                    if has_config:
+                        comp_result = await asyncio.wait_for(
+                            mod.run(initial_state, config=config, model=m), timeout=50,
+                        )
+                    else:
+                        comp_result = await asyncio.wait_for(
+                            mod.run(initial_state, model=m), timeout=50,
+                        )
+                    if isinstance(comp_result, dict):
+                        agent_outputs.update(comp_result.get("agent_outputs", {}))
+                        artifacts.extend(comp_result.get("artifacts", []))
+                        agent_metrics.update(comp_result.get("agent_metrics", {}))
+                        agent_confidence.update(comp_result.get("agent_confidence", {}))
+                except (asyncio.TimeoutError, Exception):
+                    pass  # best-effort, ne bloque jamais la synthèse
+
         # ── Critic loop : vérification adversariale post-phase 1 ──────────────
         # Trois portes d'entrée :
         #   1. Valve enable_critic_loop : toujours-on (coûteux mais maximal)
@@ -1435,7 +1490,6 @@ class Pipeline:
         #   3. auto_factcheck_high_stakes + question à enjeux (santé/légal/finance/science)
         # Le résultat rejoint agent_outputs comme tout autre agent.
         from tools.quality import should_auto_factcheck
-        user_text_for_check = _last_human_text(initial_state.get("messages", []))
         trigger_fc = enable_critic_loop and "fact_checker" not in agent_outputs and agent_outputs
         trigger_reason = "valve enable_critic_loop"
         if not trigger_fc and "fact_checker" not in agent_outputs:

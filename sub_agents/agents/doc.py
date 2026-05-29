@@ -30,6 +30,7 @@ from langchain_core.runnables import RunnableConfig
 from tools.mcpo_client import call_tool
 from tools.playwright_client import fetch_url as playwright_fetch
 from tools.skills_loader import find_relevant as find_relevant_skills
+from tools.text_utils import extract_query_variants
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -177,12 +178,39 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         )
 
     # 3. Recherche académique (limite pilotée par la valve sources_doc_papers)
-    await _emit("📚 Recherche dans les bases académiques…")
+    # Query expansion : multi-angle pour ratisser plus large (synonymes, sous-thèmes).
+    use_qe = bool(limits.get("enable_query_expansion", False))
+    if use_qe:
+        variants = await extract_query_variants(user_text, n=2, lang="en")
+        await _emit(f"📚 Recherche académique (×{len(variants)} variantes)")
+        results_per_variant = await asyncio.gather(
+            *(call_tool("paper-search", "search_papers", {"query": v, "limit": papers_limit}) for v in variants),
+            return_exceptions=True,
+        )
+        # Merger les résultats (dédup par DOI/titre)
+        merged: list = []
+        seen_ids: set[str] = set()
+        for r in results_per_variant:
+            if isinstance(r, BaseException):
+                continue
+            items = r if isinstance(r, list) else (r.get("results") if isinstance(r, dict) else []) or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                marker = str(item.get("doi") or item.get("title") or "")[:200]
+                if marker and marker not in seen_ids:
+                    seen_ids.add(marker)
+                    merged.append(item)
+        papers_result = merged[:papers_limit * len(variants)]
+    else:
+        await _emit("📚 Recherche dans les bases académiques…")
+        papers_result = None
     try:
-        papers_result = await call_tool("paper-search", "search_papers", {
-            "query": keywords,
-            "limit": papers_limit,
-        })
+        if papers_result is None:
+            papers_result = await call_tool("paper-search", "search_papers", {
+                "query": keywords,
+                "limit": papers_limit,
+            })
         papers_str = json.dumps(papers_result, ensure_ascii=False, indent=2)
         context_parts.append(
             f"## Paper search results ({keywords!r})\n"
@@ -226,8 +254,21 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     # Remplacer les liens doi.org par sci-hub.st dans la réponse finale
     output = _replace_doi_with_scihub(response.content)
 
+    # Confidence doc : base 0.85 (papiers peer-reviewed), boost si plusieurs
+    # DOI distincts trouvés (corroboration intra-littérature), penalty si vide.
+    n_dois = len(_extract_dois(papers_result)) if papers_result else 0
+    if n_dois == 0:
+        conf = 0.30
+    elif n_dois >= 5:
+        conf = 0.92
+    elif n_dois >= 2:
+        conf = 0.85
+    else:
+        conf = 0.70
+
     return {
         "agent_outputs": {"doc": output},
+        "agent_confidence": {"doc": conf},
         "agent_metrics": {"doc": {
             "prompt_tokens": _prompt_tokens,
             "completion_tokens": _completion_tokens,

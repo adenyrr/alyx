@@ -23,6 +23,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
+from tools.text_utils import extract_query_variants
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -119,19 +120,45 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     truncate_chars = int(limits.get("truncate_chars", 4000))
 
     wiki_raw = ""
+    summaries: list[str] = []  # alimenté dans le try, lu après pour la confidence
     try:
-        await _emit(f"📖 Recherche Wikipédia : {keywords}")
-        search_result = await call_tool("wikipedia", "search_wikipedia",
-                                        {"query": keywords, "limit": articles_n, "language": lang})
-        titles = _extract_titles(search_result, max_n=articles_n)
+        # Query expansion : si la valve est on, lancer N variantes en parallèle
+        # pour diversifier les articles trouvés (différents angles du sujet).
+        use_qe = bool(limits.get("enable_query_expansion", False))
+        if use_qe:
+            variants = await extract_query_variants(user_text, n=2, lang=lang)
+            await _emit(f"📖 Recherche Wikipédia (×{len(variants)} variantes)")
+            search_results = await asyncio.gather(
+                *(call_tool("wikipedia", "search_wikipedia",
+                            {"query": v, "limit": articles_n, "language": lang})
+                  for v in variants),
+                return_exceptions=True,
+            )
+            # Merger les titres uniques
+            all_titles: list[str] = []
+            seen_t: set[str] = set()
+            for r in search_results:
+                if isinstance(r, BaseException):
+                    continue
+                for t in _extract_titles(r, max_n=articles_n):
+                    if t not in seen_t:
+                        seen_t.add(t)
+                        all_titles.append(t)
+            titles = all_titles[:articles_n]
+            search_result = {"variants": variants, "merged_titles": titles}
+        else:
+            await _emit(f"📖 Recherche Wikipédia : {keywords}")
+            search_result = await call_tool("wikipedia", "search_wikipedia",
+                                            {"query": keywords, "limit": articles_n, "language": lang})
+            titles = _extract_titles(search_result, max_n=articles_n)
         summaries: list[str] = []
         if titles:
             await _emit(f"📄 Résumés des {len(titles)} article(s)…")
             # Fetch parallèle des résumés (gain : ~ (N-1) * latence d'un appel).
-            async def _fetch_one(title: str) -> tuple[str, str] | None:
+            async def _fetch_one(t: str) -> tuple[str, str] | None:
                 try:
-                    summary = await call_tool("wikipedia", "get_summary", {"title": title, "language": lang})
-                    return (title, json.dumps(summary, ensure_ascii=False)[:truncate_chars])
+                    summary = await call_tool("wikipedia", "get_summary", {"title": t, "language": lang})
+                    return (t, json.dumps(summary, ensure_ascii=False)[:truncate_chars])
                 except Exception:
                     return None
             fetched = await asyncio.gather(*(_fetch_one(t) for t in titles), return_exceptions=True)
@@ -158,8 +185,18 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     _u = getattr(response, "usage_metadata", None) or {}
     _prompt_tokens += _u.get("input_tokens", 0) or 0
     _completion_tokens += _u.get("output_tokens", 0) or 0
+    # Confidence wikipedia : 0.70 si ≥ 2 articles consultés, 0.55 si 1 seul,
+    # 0.30 si indisponible. Wikipedia est globalement fiable mais éditable —
+    # on ne dépasse pas 0.75 sans corroboration.
+    if "indisponible" in wiki_raw.lower():
+        conf = 0.30
+    elif len(summaries) >= 2:
+        conf = 0.70
+    else:
+        conf = 0.55
     return {
         "agent_outputs": {"wikipedia": response.content},
+        "agent_confidence": {"wikipedia": conf},
         "agent_metrics": {"wikipedia": {
             "prompt_tokens": _prompt_tokens,
             "completion_tokens": _completion_tokens,
