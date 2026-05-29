@@ -191,3 +191,123 @@ def enrich_citation_with_authority(title: str, url: str) -> str:
     score = score_url_authority(url)
     emoji = authority_emoji(score)
     return f"{emoji} [{title}]({url})"
+
+
+# ─── Diversité des sources ────────────────────────────────────────────────────
+# Mesure si une réponse s'appuie sur des sources INDÉPENDANTES (plusieurs
+# domaines / plusieurs tiers d'autorité) plutôt que sur un seul. Permet
+# d'éviter les hallucinations causées par la sur-représentation d'une source.
+
+
+def _root_domain(host: str) -> str:
+    """Réduit un hostname à son domaine racine (ex. fr.wikipedia.org → wikipedia.org).
+    Heuristique simple : garde les 2 derniers labels sauf pour les TLDs composés
+    courants (.co.uk, .gov.uk, .com.au, .gouv.fr…).
+    """
+    if not host:
+        return ""
+    parts = host.lower().split(".")
+    if len(parts) < 2:
+        return host.lower()
+    compound = {"co.uk", "gov.uk", "ac.uk", "com.au", "edu.au", "gov.au",
+                "co.jp", "ac.jp", "gouv.fr", "gc.ca", "gov.ca"}
+    last_two = ".".join(parts[-2:])
+    if last_two in compound and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return last_two
+
+
+def source_diversity_score(urls: list[str]) -> float:
+    """Score [0,1] de diversité des sources à partir d'une liste d'URLs.
+
+    Heuristique pondérée :
+      - Compte les DOMAINES RACINE distincts (pas les sous-domaines)
+      - Bonus si différents tiers d'autorité représentés (peer-reviewed + presse,
+        ou .gov + wikipedia, etc.)
+      - 0.0 = un seul domaine ou aucune URL
+      - 1.0 = ≥ 4 domaines distincts dont ≥ 2 tiers d'autorité différents
+    """
+    if not urls:
+        return 0.0
+    from urllib.parse import urlparse
+    domains: set[str] = set()
+    auth_buckets: set[str] = set()
+    for u in urls:
+        if not isinstance(u, str):
+            continue
+        try:
+            host = (urlparse(u).hostname or "").lower()
+        except Exception:
+            continue
+        if not host:
+            continue
+        domains.add(_root_domain(host))
+        score = score_url_authority(u)
+        # Bucketize en 3 tiers grossiers
+        if score >= 0.85:
+            auth_buckets.add("high")
+        elif score >= 0.55:
+            auth_buckets.add("mid")
+        else:
+            auth_buckets.add("low")
+    n_domains = len(domains)
+    if n_domains == 0:
+        return 0.0
+    if n_domains == 1:
+        return 0.15
+    base = min(0.75, 0.30 + 0.15 * (n_domains - 1))  # 2→0.45, 3→0.60, 4+→0.75
+    if len(auth_buckets) >= 2:
+        base += 0.15
+    return min(1.0, base)
+
+
+def diversity_emoji(score: float) -> str:
+    """Mini-badge visuel pour un score de diversité."""
+    if score >= 0.75:
+        return "🟢"
+    if score >= 0.55:
+        return "🟡"
+    if score >= 0.30:
+        return "🟠"
+    return "🔴"
+
+
+def extract_urls_from_text(text: str) -> list[str]:
+    """Extrait les URLs http(s) d'un texte (déduplique en conservant l'ordre)."""
+    import re
+    if not text:
+        return []
+    found = re.findall(r"https?://[^\s\)\]\"'<>]+", text)
+    seen: set[str] = set()
+    result: list[str] = []
+    for u in found:
+        clean = u.rstrip(".,;:!?)")
+        if clean not in seen:
+            seen.add(clean)
+            result.append(clean)
+    return result
+
+
+# ─── Auto-corroboration : choisir l'agent complémentaire ──────────────────────
+
+# Compléments pour le single-source : quand un seul agent factuel a tourné,
+# spawn celui-ci pour avoir une seconde source indépendante.
+_COMPLEMENT_MAP: dict[str, str] = {
+    "web":       "wikipedia",  # actualité → vérifier par l'encyclopédie
+    "wikipedia": "web",        # encyclopédie → vérifier par sources récentes
+    "doc":       "web",        # papier scientifique → contextualiser via web
+}
+
+
+def pick_complement_agent(factual_agents_run: set[str], already_run: set[str]) -> str | None:
+    """Pour un set d'agents factuels exécutés, propose un agent complémentaire
+    à spawner pour augmenter la diversité de sources. Returns None si
+    impossible (déjà ≥ 2 agents factuels, ou complément déjà tourné).
+    """
+    if len(factual_agents_run) != 1:
+        return None  # déjà multi-source ou aucune source factuelle
+    only = next(iter(factual_agents_run))
+    comp = _COMPLEMENT_MAP.get(only)
+    if not comp or comp in already_run:
+        return None
+    return comp

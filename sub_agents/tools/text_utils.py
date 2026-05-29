@@ -63,6 +63,65 @@ If a URL is present in the question, return that URL verbatim (no keyword extrac
 """
 
 
+_QUERY_VARIANTS_SYSTEM = """\
+Reformulate the user's question into N distinct search queries that maximize
+coverage and source diversity. Each variant should :
+  - target a different angle / aspect of the question
+  - use different keywords (synonyms, related concepts, broader/narrower terms)
+  - be 3-7 words long, in {lang}
+Output ONLY a JSON array of strings, no commentary.
+Example for "Marie Curie" with N=3 :
+  ["Marie Curie biography Nobel", "radioactivity discovery Pierre Curie", "Polonium radium scientific work"]
+"""
+
+
+async def extract_query_variants(
+    user_text: str,
+    *,
+    n: int = 3,
+    lang: str | None = None,
+    model: str = "openrouter/qwen3.5-flash",
+    max_tokens: int = 120,
+) -> list[str]:
+    """Génère N variantes de requête couvrant différents angles/synonymes/aspects.
+
+    Permet de multiplier les sources : au lieu d'une seule requête DDG/Wikipedia/
+    paper-search, on en fait N en parallèle pour récupérer un set de résultats
+    PLUS DIVERS (moins de chambre d'écho).
+
+    Fallback : si le LLM échoue ou ne retourne pas du JSON, on dégrade à
+    `[user_text[:120]]` (1 variante = texte brut). Pas d'erreur bloquante.
+    """
+    if lang is None:
+        lang = detect_language(user_text)
+
+    import json
+    import re
+    from langchain_openai import ChatOpenAI as _Chat
+    from langchain_core.messages import HumanMessage as _HM, SystemMessage as _SM
+    llm = _Chat(
+        model=model,
+        base_url=os.environ.get("LITELLM_URL", "http://litellm:4000/v1"),
+        api_key=os.environ.get("LITELLM_API_KEY", ""),
+        temperature=0.3,  # un peu de variabilité pour vraiment diversifier
+        max_tokens=max_tokens,
+    )
+    sys_prompt = _QUERY_VARIANTS_SYSTEM.format(lang=lang).replace("N", str(n))
+    try:
+        resp = await llm.ainvoke([_SM(content=sys_prompt), _HM(content=user_text)])
+        raw = strip_think_tags(resp.content).strip()
+        m = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if not m:
+            return [user_text[:120]]
+        variants = json.loads(m.group(0))
+        variants = [str(v).strip()[:120] for v in variants if isinstance(v, str) and v.strip()][:n]
+        if not variants:
+            return [user_text[:120]]
+        return variants
+    except Exception:
+        return [user_text[:120]]
+
+
 async def extract_keywords(
     user_text: str,
     *,
