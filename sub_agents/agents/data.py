@@ -51,6 +51,7 @@ Reply in English with structured output.
 async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+    current_date = state.get("current_date", "")
 
     emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
 
@@ -112,6 +113,9 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             except Exception as exc:
                 finance_blocks.append(f"### {label}\n(unavailable: {exc})")
         context_parts.append(f"## Yahoo Finance ({ticker})\n" + "\n\n".join(finance_blocks))
+
+    if current_date:
+        context_parts.insert(0, f"## Current date: {current_date}")
 
     context = "\n\n".join(context_parts)
     llm = ChatOpenAI(

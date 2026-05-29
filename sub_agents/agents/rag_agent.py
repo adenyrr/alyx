@@ -71,6 +71,9 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     # top_k piloté par la valve sources_rag_top_k
     limits = state.get("_sources") or {}
     top_k = int(limits.get("rag_top_k", 5))
+    truncate_chars = int(limits.get("truncate_chars", 4000))
+    # Chunk individuel = truncate_chars / top_k pour garder la contexte total raisonnable
+    chunk_chars = max(truncate_chars // top_k, 400)
 
     rag_context = ""
     try:
@@ -91,7 +94,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
                 if text:
                     chunks.append(
                         f"<untrusted_content source=\"{source}\" score=\"{score:.3f}\">\n"
-                        f"{text[:800]}\n</untrusted_content>"
+                        f"{text[:chunk_chars]}\n</untrusted_content>"
                     )
             rag_context = "\n\n".join(chunks)
     except Exception as exc:

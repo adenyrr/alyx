@@ -123,7 +123,8 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         [SystemMessage(content=_KW_SYSTEM), HumanMessage(content=user_text)],
         config={"max_tokens": 30},
     )
-    keywords = kw_resp.content.strip().replace("\n", " ")[:120]
+    keywords = re.sub(r"<think(?:ing)?[^>]*>.*?</think(?:ing)?>", "", kw_resp.content,
+                      flags=re.DOTALL | re.IGNORECASE).strip().replace("\n", " ")[:120]
     _prompt_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
     _completion_tokens = (getattr(kw_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
     await _emit(f"🔍 Mots-clés : {keywords}")
@@ -145,24 +146,35 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             "## Methodological skills (apply these conventions to your output)\n" + skill_block
         )
 
-    # 2. Plan de recherche via sequential-thinking.
-    # Le MCP @modelcontextprotocol/server-sequential-thinking exige TOUS les
-    # champs (thoughtNumber/totalThoughts/nextThoughtNeeded) — sinon 422.
-    await _emit("🧩 Plan de recherche…")
-    try:
-        seq_result = await call_tool("sequential-thinking", "sequentialthinking", {
-            "thought": f"Research plan for: {keywords}",
-            "thoughtNumber": 1,
-            "totalThoughts": 1,
-            "nextThoughtNeeded": False,
-        })
-        seq_str = json.dumps(seq_result, ensure_ascii=False, indent=2)
+    # 2. Plan de recherche via sequential-thinking (3 étapes : framing, sources,
+    # synthesis-guidelines). Le MCP exige les 4 champs sinon 422.
+    # On itère réellement au lieu d'un thoughtNumber=1/totalThoughts=1 qui était un no-op.
+    await _emit("🧩 Plan de recherche académique…")
+    plan_steps = [
+        f"Frame the research question precisely for: {keywords}",
+        f"Identify the relevant databases, study types and inclusion criteria for: {keywords}",
+        f"Define how to weigh evidence quality (study design, sample size, recency) for: {keywords}",
+    ]
+    plan_outputs: list[str] = []
+    for i, step in enumerate(plan_steps, 1):
+        try:
+            seq_result = await call_tool("sequential-thinking", "sequentialthinking", {
+                "thought": step,
+                "thoughtNumber": i,
+                "totalThoughts": len(plan_steps),
+                "nextThoughtNeeded": i < len(plan_steps),
+            })
+            seq_str = json.dumps(seq_result, ensure_ascii=False, indent=2)
+            plan_outputs.append(f"### Plan step {i}: {step}\n{seq_str[:800]}")
+        except Exception as exc:
+            plan_outputs.append(f"### Plan step {i}: {step}\n[unavailable: {exc}]")
+    if plan_outputs:
         context_parts.append(
             "## Research plan\n"
-            f"<untrusted_content source=\"sequential-thinking\">\n{seq_str[:1500]}\n</untrusted_content>"
+            f"<untrusted_content source=\"sequential-thinking\">\n"
+            + "\n\n".join(plan_outputs)
+            + "\n</untrusted_content>"
         )
-    except Exception as exc:
-        context_parts.append(f"## Sequential-thinking unavailable: {exc}")
 
     # 3. Recherche académique (limite pilotée par la valve sources_doc_papers)
     await _emit("📚 Recherche dans les bases académiques…")

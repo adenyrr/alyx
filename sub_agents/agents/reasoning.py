@@ -15,6 +15,7 @@ Usage : analyses complexes, plans stratégiques, diagnostics différentiels,
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import TYPE_CHECKING
@@ -119,9 +120,13 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     except Exception:
         steps = [user_text]
 
-    # 2. Sequential-thinking pour chaque étape
-    for i, step in enumerate(steps, 1):
-        await _emit(f"🧩 Étape {i}/{len(steps)} · {step[:120]}")
+    # 2. Sequential-thinking en parallèle pour chaque étape.
+    # Chaque appel MCP est indépendant (le serveur sequential-thinking ne maintient
+    # pas d'état partagé entre invocations), donc on peut fan-out sans risque.
+    # Gain : N steps × latence_unitaire → max(latence_unitaire).
+    await _emit(f"🧩 Analyse parallèle de {len(steps)} étape(s)…")
+
+    async def _run_step(i: int, step: str) -> tuple[int, str, str]:
         await _emit_reasoning(f"[Agent reasoning] Étape {i}/{len(steps)} · {step}\n")
         try:
             result = await call_tool("sequential-thinking", "sequentialthinking", {
@@ -131,14 +136,21 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
                 "nextThoughtNeeded": i < len(steps),
             })
             result_str = json.dumps(result, ensure_ascii=False, indent=2) if isinstance(result, (dict, list)) else str(result)
-            context_parts.append(f"## Step {i}: {step}\n{result_str[:2000]}")
-            if show_reasoning and show_agent_reasoning:
-                summary = _compact_status_reasoning(result_str)
-                if summary:
-                    await _emit_reasoning(f"{summary}\n")
+            return (i, step, result_str[:2000])
         except Exception as exc:
-            context_parts.append(f"## Step {i}: {step}\n[Sequential-thinking unavailable: {exc}]")
-            await _emit(f"⚠️ Étape {i}/{len(steps)} indisponible")
+            return (i, step, f"[Sequential-thinking unavailable: {exc}]")
+
+    step_results = await asyncio.gather(
+        *(_run_step(i, step) for i, step in enumerate(steps, 1)),
+        return_exceptions=False,
+    )
+    # Tri par index pour conserver l'ordre des étapes dans le contexte de synthèse.
+    for i, step, body in sorted(step_results, key=lambda t: t[0]):
+        context_parts.append(f"## Step {i}: {step}\n{body}")
+        if show_reasoning and show_agent_reasoning:
+            summary = _compact_status_reasoning(body)
+            if summary:
+                await _emit_reasoning(f"{summary}\n")
 
     context = "\n\n".join(context_parts) if context_parts else "(no structured thinking available)"
 

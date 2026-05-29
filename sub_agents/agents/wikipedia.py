@@ -12,6 +12,7 @@ Stratégie :
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -38,16 +39,42 @@ Structure ta réponse avec des titres markdown clairs.
 Réponds dans la même langue que la question.
 """
 
-_KW_SYSTEM = """\
-Extrais 2 à 3 mots-clés courts en français, adaptés à une recherche Wikipedia.
-Ne retourne QUE les mots-clés, séparés par des espaces, sans ponctuation,
-sans explication.
+_KW_SYSTEM_TEMPLATE = """\
+Extract 2 to 3 short keywords for Wikipedia search, in {lang} (ISO code).
+Return ONLY the keywords separated by spaces, no punctuation, no explanation.
 """
+
+
+def _detect_language(text: str) -> str:
+    """Heuristique simple de détection de langue (fr/en/es/de/it/pt).
+
+    Retourne le code ISO le plus probable. Volontairement léger : pas de dep
+    `langdetect` (~10 Mo). Pour les questions courtes, c'est largement suffisant.
+    Défaut : 'en' (Wikipedia EN est la plus complète si on doute).
+    """
+    t = text.lower()
+    fr_markers = re.compile(r"[àâçéèêëîïôûùüÿœæ]|\b(le|la|les|un|une|des|et|est|qui|que|dans|pour|avec|sur|sans|sous|ont|sont|était|étaient|été|été|nous|vous|comment|pourquoi|quand)\b")
+    es_markers = re.compile(r"[áéíóúñ¿¡]|\b(el|la|los|las|que|para|con|sin|por|donde|cuando|cómo|qué)\b")
+    de_markers = re.compile(r"[äöüß]|\b(der|die|das|und|ist|sind|nicht|mit|für|von|was|wie|wann|warum|wo)\b")
+    it_markers = re.compile(r"\b(il|lo|la|gli|le|che|come|quando|dove|perché|sono|è|sono)\b|[àèéìòù]")
+    pt_markers = re.compile(r"[ãõáâàçéêíóôú]|\b(o|a|os|as|que|para|com|sem|por|como|quando|onde|por que)\b")
+    if fr_markers.search(t):
+        return "fr"
+    if es_markers.search(t):
+        return "es"
+    if de_markers.search(t):
+        return "de"
+    if pt_markers.search(t):
+        return "pt"
+    if it_markers.search(t):
+        return "it"
+    return "en"
 
 
 async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+    current_date = state.get("current_date", "")
 
     emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
 
@@ -66,10 +93,15 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         max_tokens=512,
     )
 
-    # 1. Extraire 2-3 mots-clés français
+    # 1. Détection langue + extraction de 2-3 mots-clés DANS LA MÊME LANGUE.
+    # Le MCP wikipedia-mcp est démarré avec --language fr (cf. mcpo_config.json),
+    # mais beaucoup d'instances acceptent un paramètre `language` à l'appel —
+    # on le passe défensivement (ignoré si non supporté). Le keyword-extractor,
+    # lui, génère DÉJÀ dans la bonne langue, ce qui aide même si le MCP reste fr.
+    lang = _detect_language(user_text)
     kw_resp = await llm.ainvoke(
         [
-            SystemMessage(content=_KW_SYSTEM),
+            SystemMessage(content=_KW_SYSTEM_TEMPLATE.format(lang=lang)),
             HumanMessage(content=user_text),
         ],
         config={"max_tokens": 20},
@@ -84,29 +116,37 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     # N piloté par la valve sources_wikipedia_articles.
     limits = state.get("_sources") or {}
     articles_n = int(limits.get("wikipedia_articles", 3))
+    truncate_chars = int(limits.get("truncate_chars", 4000))
 
     wiki_raw = ""
     try:
         await _emit(f"📖 Recherche Wikipédia : {keywords}")
-        search_result = await call_tool("wikipedia", "search_wikipedia", {"query": keywords, "limit": articles_n})
+        search_result = await call_tool("wikipedia", "search_wikipedia",
+                                        {"query": keywords, "limit": articles_n, "language": lang})
         titles = _extract_titles(search_result, max_n=articles_n)
         summaries: list[str] = []
         if titles:
             await _emit(f"📄 Résumés des {len(titles)} article(s)…")
-            for title in titles:
+            # Fetch parallèle des résumés (gain : ~ (N-1) * latence d'un appel).
+            async def _fetch_one(title: str) -> tuple[str, str] | None:
                 try:
-                    summary = await call_tool("wikipedia", "get_summary", {"title": title})
-                    summaries.append(f"### {title}\n{json.dumps(summary, ensure_ascii=False)[:1500]}")
+                    summary = await call_tool("wikipedia", "get_summary", {"title": title, "language": lang})
+                    return (title, json.dumps(summary, ensure_ascii=False)[:truncate_chars])
                 except Exception:
-                    continue
+                    return None
+            fetched = await asyncio.gather(*(_fetch_one(t) for t in titles), return_exceptions=True)
+            for item in fetched:
+                if isinstance(item, tuple):
+                    summaries.append(f"### {item[0]}\n{item[1]}")
         wiki_payload = {"search": search_result, "summaries": summaries}
-        wiki_raw = json.dumps(wiki_payload, ensure_ascii=False, indent=2)[:6000]
+        wiki_raw = json.dumps(wiki_payload, ensure_ascii=False, indent=2)[:max(truncate_chars * 2, 6000)]
     except Exception as exc:
         wiki_raw = f"Wikipedia indisponible : {exc}"
 
     # 3. Synthèse LLM
+    date_prefix = f"## Date actuelle : {current_date}\n\n" if current_date else ""
     prompt = (
-        f"## Résultats Wikipedia (mots-clés : {keywords!r})\n{wiki_raw}"
+        f"{date_prefix}## Résultats Wikipedia (mots-clés : {keywords!r})\n{wiki_raw}"
         f"\n\nQuestion utilisateur : {user_text}"
     )
 

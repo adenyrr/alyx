@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
@@ -47,6 +48,7 @@ Retourne UNIQUEMENT le nom du lieu, sans explication.
 async def run(state: "AlyxState", config: RunnableConfig | None = None, model: str | None = None) -> dict:
     messages = state.get("messages", [])
     user_text = _last_user_message(messages)
+    current_date = state.get("current_date", "")
 
     emitter = (config.get("configurable") or {}).get("event_emitter") if config else None
 
@@ -70,7 +72,9 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         [SystemMessage(content=_LOC_SYSTEM), HumanMessage(content=user_text)],
         config={"max_tokens": 30},
     )
-    location = loc_resp.content.strip()[:80]
+    # Strip <think> tags si le modèle les émet — sinon le géocodage échoue.
+    location = re.sub(r"<think(?:ing)?[^>]*>.*?</think(?:ing)?>", "", loc_resp.content,
+                      flags=re.DOTALL | re.IGNORECASE).strip()[:80]
     _prompt_tokens = (getattr(loc_resp, "usage_metadata", None) or {}).get("input_tokens", 0) or 0
     _completion_tokens = (getattr(loc_resp, "usage_metadata", None) or {}).get("output_tokens", 0) or 0
 
@@ -82,13 +86,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     # entre "Paris, France" et "Paris, TX" par exemple)
     limits = state.get("_sources") or {}
     osm_limit = int(limits.get("geo_limit", 3))
+    truncate_chars = int(limits.get("truncate_chars", 4000))
 
     # 2. Géocodage OSM
     try:
         await _emit(f"🗺️ Géolocalisation : {location}")
         osm_result = await call_tool("osm-mcp-server", "geocode", {"q": location, "limit": osm_limit})
         osm_str = json.dumps(osm_result, ensure_ascii=False, indent=2)
-        context_parts.append(f"## OSM geocoding ({location!r})\n{osm_str[:2000]}")
+        context_parts.append(f"## OSM geocoding ({location!r})\n{osm_str[:max(truncate_chars // 2, 1000)]}")
         # Extraire lat/lon depuis la réponse (structure variable selon impl.)
         if isinstance(osm_result, list) and osm_result:
             first = osm_result[0]
@@ -110,7 +115,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
                 "forecast_days": 5,
             })
             meteo_str = json.dumps(meteo_result, ensure_ascii=False, indent=2)
-            context_parts.append(f"## Prévisions météo ({location})\n{meteo_str[:4000]}")
+            context_parts.append(f"## Prévisions météo ({location})\n{meteo_str[:truncate_chars]}")
         except Exception as exc:
             try:
                 # Certains serveurs utilisent get_current_weather
@@ -119,11 +124,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
                     "longitude": lon,
                 })
                 meteo_str = json.dumps(meteo_result, ensure_ascii=False, indent=2)
-                context_parts.append(f"## Météo actuelle ({location})\n{meteo_str[:4000]}")
+                context_parts.append(f"## Météo actuelle ({location})\n{meteo_str[:truncate_chars]}")
             except Exception as exc2:
                 context_parts.append(f"## Open-Meteo indisponible\n{exc} / {exc2}")
     else:
         context_parts.append(f"## Lieu non géolocalisé : {location!r}")
+
+    if current_date:
+        context_parts.insert(0, f"## Date actuelle : {current_date}")
 
     context = "\n\n".join(context_parts)
     prompt = f"{context}\n\nQuestion utilisateur : {user_text}"
