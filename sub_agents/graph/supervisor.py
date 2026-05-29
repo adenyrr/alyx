@@ -106,11 +106,47 @@ Given the user's last message, output ONLY a JSON array of agent names to invoke
 ═══════════════════════════════════════════════════════
  ROUTING RULES
 ═══════════════════════════════════════════════════════
-RULE 1 — WEB SEARCH IS ALWAYS A PAIR:
-  WHENEVER you would select "web" OR "wikipedia", you MUST select BOTH together.
-  "wikipedia" + "web" are ALWAYS launched in parallel for any factual, encyclopedic,
-  or current-events question.
-  → ["wikipedia", "web"] — NEVER "web" alone, NEVER "wikipedia" alone.
+RULE 1 — WEB vs WIKIPEDIA : pick the right one based on the question's nature.
+  Both can be used together when the user asks for COMPREHENSIVE coverage, but
+  it's no longer mandatory. Pick by intent :
+
+  USE "web" ALONE when :
+    - The question is about CURRENT events, news, recent (≤ 2 years), prices,
+      schedules, scores, releases, announcements, latest versions.
+    - The question targets a specific URL or recent online resource.
+    - The entity is too niche / too recent for Wikipedia coverage.
+    Examples : "actualité X", "dernière version de Y", "prix de Z aujourd'hui",
+    "que s'est-il passé cette semaine".
+
+  USE "wikipedia" ALONE when :
+    - The question is HISTORICAL, ENCYCLOPEDIC, biographical, conceptual.
+    - The topic is stable and well-documented (≥ 5 ans d'histoire).
+    - You need a definition, a concept overview, a person's biography.
+    Examples : "qui était Marie Curie", "qu'est-ce que la photosynthèse",
+    "histoire de Rome", "définition de la dialectique".
+
+  USE BOTH (parallel) ONLY when :
+    - The user explicitly demands a comprehensive answer combining historical
+      context AND current news.
+    - The topic spans both : "X aujourd'hui ET dans l'histoire", "actualité de
+      cette personne célèbre".
+    - The supervisor genuinely can't decide between historical and current —
+      DEFAULT to both rather than risk missing context.
+
+  Examples :
+    "Bitcoin price now"                → ["web"]
+    "What is the Higgs boson?"         → ["wikipedia"]
+    "Who is Marie Curie?"              → ["wikipedia"]
+    "Latest news about NASA"           → ["web"]
+    "Compare ChatGPT and Claude"       → ["web", "wikipedia"]
+    "History of OpenAI and recent funding" → ["web", "wikipedia"]
+
+RULE 1bis — DATA RELIABILITY :
+  When a single-agent web call answers a FACTUAL question with stakes
+  (medical, legal, financial, scientific claims), the fact_checker MAY be
+  auto-triggered by the pipeline (valve `enable_critic_loop` or auto-trigger
+  on low confidence). You don't need to add it explicitly — just route to web
+  and let the reliability layer kick in if needed.
 
 RULE 2 — RETURN [] (no agent) ONLY for:
   Greetings, thanks, simple chat ("comment vas-tu ?", "merci"), pure opinions with no factual
@@ -227,11 +263,17 @@ RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "Merci !" → []
   "Comment vas-tu ?" → []
   "Peux-tu reformuler ?" → []
-  "Qu'est-ce que la photosynthèse ?" → ["wikipedia", "web"]
-  "Qui est Marie Curie ?" → ["wikipedia", "web"]
+  "Qu'est-ce que la photosynthèse ?" → ["wikipedia"]
+  "Qui est Marie Curie ?" → ["wikipedia"]
+  "Histoire de Rome" → ["wikipedia"]
+  "Définition de la dialectique" → ["wikipedia"]
   "Quel est le cours actuel du Bitcoin ?" → ["data"]
   "Quelle est la météo à Paris demain ?" → ["geo"]
-  "Qu'est-il arrivé au gouvernement cette semaine ?" → ["wikipedia", "web"]
+  "Qu'est-il arrivé au gouvernement cette semaine ?" → ["web"]
+  "Actualité de la mission Artemis" → ["web"]
+  "Dernière version de Python" → ["web"]
+  "Compare ChatGPT et Claude (positionnement et derniers tarifs)" → ["wikipedia", "web"]
+  "Bitcoin : son histoire ET son cours actuel" → ["wikipedia", "web", "data"]
   "Quelles sont les dernières études sur Alzheimer ?" → ["doc"]
   "Dernières publications sur les LLM en 2025 ET actualités ?" → ["doc", "wikipedia", "web"]
   "Écris un script Python pour parser du JSON" → ["dev"]
@@ -243,14 +285,15 @@ RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "Tu te souviens de ma préférence pour le thème sombre ?" → ["memory"]
   "Souviens-toi que je préfère le markdown" → ["memory"]
   "[image jointe] Qu'est-ce que c'est ?" → []
-  "[image jointe + question factuelle] Qui a peint ça ?" → ["wikipedia", "web"]
+  "[image jointe + question factuelle] Qui a peint ça ?" → ["wikipedia"]
   "Cours de l'action Apple en ce moment" → ["data"]
   "Carte de la région Bretagne" → ["geo"]
   "Analyse les risques d'un LBO" → ["reasoning"]
   "Quels sont les avantages et inconvénients de chaque approche d'IA ?" → ["reasoning"]
   "Plan stratégique pour une startup SaaS B2B" → ["reasoning"]
   "Analyse médicale approfondie des traitements anti-TNF" → ["reasoning", "doc"]
-  "Donne-moi la population de Tokyo" → ["wikipedia", "web"]
+  "Donne-moi la population de Tokyo" → ["wikipedia"]
+  "Population de Tokyo et croissance récente" → ["wikipedia", "web"]
   "Recherche les études sur le microbiome intestinal" → ["doc"]
   "Find the GDP of the top 10 countries and create an interactive bar chart" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
   "Recherche les coordonnées GPS de Paris, Lyon, Marseille et affiche les sur une carte Leaflet" → {"routing": ["geo"], "routing_next": ["dev"]}

@@ -25,13 +25,23 @@ import re
 _TIME_SENSITIVE = {"web", "geo", "data", "image_gen", "media", "rag", "memory"}
 
 _KEY_PREFIX = "alyx:agentcache:"
+_ANONYMOUS_USER = "_anon"  # Cache utilisable même sans user_id (mode dev/test)
 
 
-def cache_key(user_text: str) -> str:
-    """Clé déterministe normalisée à partir du message utilisateur."""
+def cache_key(user_text: str, user_id: str | None = None) -> str:
+    """Clé déterministe scopée par utilisateur·rice.
+
+    Format : `alyx:agentcache:{user_id}:{sha256(texte)}`. Le user_id en préfixe
+    garantit l'isolation : deux utilisateur·rices posant la même question ont des
+    clés différentes, pas de fuite de cache entre comptes.
+
+    Si user_id est absent (auth désactivée, mode dev), tombe sur `_anon` — toujours
+    isolé du cache des utilisateur·rices authentifié·es.
+    """
     norm = re.sub(r"\s+", " ", (user_text or "").strip().lower())[:1000]
     digest = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
-    return _KEY_PREFIX + digest
+    uid = (user_id or _ANONYMOUS_USER).strip() or _ANONYMOUS_USER
+    return f"{_KEY_PREFIX}{uid}:{digest}"
 
 
 def is_cacheable(agent_outputs: dict, artifacts: list) -> bool:
@@ -101,13 +111,19 @@ async def _embed(text: str, embed_url: str, embed_model: str, api_key: str) -> l
 
 
 async def semantic_get(qdrant_url: str, qdrant_api_key: str, collection: str,
-                       embedding: list[float], threshold: float = 0.92) -> dict | None:
-    """Cherche dans Qdrant le point le plus proche de `embedding`. Si score ≥
-    threshold (cosinus), retourne son payload['agent_outputs']. Sinon None.
+                       embedding: list[float], threshold: float = 0.92,
+                       user_id: str | None = None) -> dict | None:
+    """Cherche dans Qdrant le point le plus proche de `embedding`, FILTRÉ par
+    `user_id`. Si score ≥ threshold (cosinus), retourne payload['agent_outputs'].
+
+    Multi-user safe : le filtre garantit qu'un·e utilisateur·rice ne peut JAMAIS
+    récupérer le cache sémantique d'un·e autre, même si les embeddings sont proches.
+
     Échec silencieux : indisponibilité Qdrant ⇒ None (pas d'erreur bloquante).
     """
     if not embedding:
         return None
+    uid = (user_id or _ANONYMOUS_USER).strip() or _ANONYMOUS_USER
     try:
         import httpx
         headers = {"api-key": qdrant_api_key} if qdrant_api_key else {}
@@ -117,6 +133,9 @@ async def semantic_get(qdrant_url: str, qdrant_api_key: str, collection: str,
                 "vector": embedding,
                 "limit": 1,
                 "with_payload": True,
+                "filter": {
+                    "must": [{"key": "user_id", "match": {"value": uid}}]
+                },
             })
             if resp.status_code != 200:
                 return None
@@ -134,39 +153,50 @@ async def semantic_get(qdrant_url: str, qdrant_api_key: str, collection: str,
 
 
 async def semantic_store(qdrant_url: str, qdrant_api_key: str, collection: str,
-                         embedding: list[float], agent_outputs: dict) -> None:
-    """Stocke (embedding, agent_outputs) dans Qdrant. Échec silencieux.
+                         embedding: list[float], agent_outputs: dict,
+                         user_id: str | None = None) -> None:
+    """Stocke (embedding, agent_outputs, user_id) dans Qdrant. Échec silencieux.
 
-    Crée la collection si elle n'existe pas (avec la dimension d'embedding
-    déduite). Idempotent.
+    Le payload contient user_id pour permettre le filtre de lecture (cf.
+    semantic_get). L'ID du point intègre user_id : un même texte stocké par
+    plusieurs utilisateur·rices coexiste sans collision.
+
+    Crée la collection idempotemment.
     """
     if not embedding or not agent_outputs:
         return
+    uid = (user_id or _ANONYMOUS_USER).strip() or _ANONYMOUS_USER
     try:
-        import hashlib
         import httpx
         headers = {"api-key": qdrant_api_key} if qdrant_api_key else {}
         base = qdrant_url.rstrip("/")
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Crée la collection idempotemment
+            # Crée la collection idempotemment + index sur user_id pour des
+            # filtres rapides (sinon Qdrant linéaire sur le payload).
             await client.put(
                 f"{base}/collections/{collection}",
                 headers=headers,
                 json={"vectors": {"size": len(embedding), "distance": "Cosine"}},
             )
-            # Upsert du point. Pour ne pas accumuler indéfiniment, on hash le
-            # premier output text comme ID — un même contenu réécrit son point.
+            try:
+                await client.put(
+                    f"{base}/collections/{collection}/index",
+                    headers=headers,
+                    json={"field_name": "user_id", "field_schema": "keyword"},
+                )
+            except Exception:
+                pass  # déjà créé
+            # ID intègre user_id pour éviter collision multi-user sur même contenu
             first_out = next(iter(agent_outputs.values()), "")
-            pid_str = hashlib.sha256(first_out.encode("utf-8", errors="ignore")).hexdigest()[:16]
-            # Qdrant accepte les IDs en int — on convertit hex en int.
-            pid = int(pid_str, 16)
+            seed = f"{uid}|{first_out}".encode("utf-8", errors="ignore")
+            pid = int(hashlib.sha256(seed).hexdigest()[:16], 16)
             await client.put(
                 f"{base}/collections/{collection}/points",
                 headers=headers,
                 json={"points": [{
                     "id": pid,
                     "vector": embedding,
-                    "payload": {"agent_outputs": agent_outputs},
+                    "payload": {"agent_outputs": agent_outputs, "user_id": uid},
                 }]},
             )
     except Exception:
