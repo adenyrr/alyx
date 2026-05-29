@@ -1,7 +1,7 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.8.1
+version: 0.9.0
 requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, pypandoc-binary>=1.13, openpyxl>=3.1, openai>=1.0, pydantic>=2.0
 """
 
@@ -227,11 +227,36 @@ Tu as des capacités natives de vision. Si des images t'ont été transmises,
 analyse-les directement sans mentionner d'agent ou de processus interne.
 
 ══════════════ SOURCES (OBLIGATOIRE) ═══════════════
-À la fin de chaque réponse (hors balises <think>) :
-  - Cite toutes les sources avec des liens Markdown : [Titre](url)
-  - Pour les articles académiques : auteurs, titre, journal, année, DOI
-  - Format : > 📖 [Auteurs (année) — *Titre*](url)
-  - Reprends fidèlement les sources fournies par les agents.
+
+RÈGLE 1 — CITATIONS INLINE OBLIGATOIRES sur les claims factuels :
+  - Chaque affirmation factuelle (chiffre, date, nom, événement, étude, mesure)
+    DOIT porter un marqueur footnote `[^N]` qui pointe vers la source.
+  - Numérote séquentiellement (1, 2, 3…) dans l'ordre d'apparition.
+  - Format inline : « Selon une étude de 2024 [^1], l'efficacité atteint 85% [^2]. »
+  - NE PAS construire toi-même la bibliographie : un bloc `## 📚 Sources`
+    enrichi de badges d'autorité (🟢/🟡/🟠/🔴) est AUTO-AJOUTÉ par le système
+    après ta réponse, en mappant tes [^N] aux URLs des agents. Tu numérotes
+    juste — le système relie. Si tu ajoutes un footer Sources toi-même, il
+    fera doublon avec celui auto-généré.
+
+RÈGLE 2 — INDICATEUR DE CONFIANCE sur les claims à enjeux :
+  - Pour les claims médicaux / légaux / financiers / scientifiques, ajoute
+    une marque de confiance après le claim : `(confiance: élevée)`, `(confiance:
+    modérée)`, `(confiance: faible)`.
+  - Si un bloc `## Confiance par agent` est présent dans ton contexte, utilise-le
+    pour calibrer : agent 🟢 → confiance élevée ; 🟡 → modérée ; 🟠/🔴 → faible.
+  - Si plusieurs agents convergent → confiance élevée. Si un seul agent → calibre
+    sur sa propre confiance.
+
+RÈGLE 3 — TRANSPARENCE EN CAS DE DOUTE :
+  - Si les agents n'ont pas trouvé d'info, dis-le explicitement : « Les
+    recherches n'ont pas remonté de source fiable sur X. »
+  - Si les agents se CONTRADICTENT, signale-le : « Le web indique X [^1] alors
+    que Wikipédia mentionne Y [^2] — la divergence reste à investiguer. »
+
+RÈGLE 4 — Pour les articles académiques :
+  Format inline étendu : « auteurs (année) ont montré que X [^N]. »
+  Le bloc bibliographique auto-généré inclura titre + journal + DOI.
 
 ══════════════ SIGNATURE ═══════════════════
 NE génère PAS de ligne de signature ni de séparateur `---` en fin de réponse.
@@ -477,6 +502,7 @@ class Pipeline:
         auto_factcheck_high_stakes: bool = Field(default=True, description="Auto-déclenche fact_checker si la question contient des mots-clés à enjeux (santé / légal / financier / scientifique)")
         inject_confidence_in_synthesis: bool = Field(default=True, description="Passer le bloc de confiance par agent à la synthèse Alyx pour pondération des claims")
         enrich_citations_authority: bool = Field(default=True, description="Ajouter un badge d'autorité (🟢🟡🟠🔴) à chaque source citée selon la fiabilité du domaine")
+        emit_bibliography_block: bool = Field(default=True, description="Émettre un bloc `## 📚 Sources` numéroté en fin de message avec badge d'autorité par source. Permet aux marqueurs [^N] inline d'Alyx de pointer vers les sources.")
 
         # --- Multi-source : restauration de l'intention « plusieurs sources indépendantes » ---
         auto_corroborate_single_source: bool = Field(default=True, description="Si UN SEUL agent factuel (web/wikipedia/doc) tourne en phase 1 ET (confiance < seuil OU question à enjeux), lance automatiquement son agent complémentaire pour avoir une seconde source indépendante")
@@ -1153,6 +1179,16 @@ class Pipeline:
                 q.put(doc_links)
             await _emit_writer_attachments(event_emitter, self.valves, artifacts)
 
+            # Bibliographie auto-construite : bloc de sources numérotées avec
+            # badges d'autorité. Auto-construit côté pipeline (pas le LLM) →
+            # zéro risque d'hallucination de sources. Les marqueurs [^N] que
+            # la synthèse Alyx ajoute inline (via prompt update) pointent ici.
+            if self.valves.emit_bibliography_block:
+                from tools.quality import build_bibliography
+                bib = build_bibliography(_extract_citations(agent_outputs), agent_confidence)
+                if bib:
+                    q.put(bib)
+
             elapsed = time.perf_counter() - t0
             if synth_usage_out:
                 u = synth_usage_out[0]
@@ -1691,13 +1727,16 @@ def _strip_think_tags(text: str) -> str:
 def _build_document_links(artifacts: list[dict]) -> str:
     """
     Construit le bloc de téléchargement data-URI pour les documents produits par
-    l'agent writer. Émis directement dans le flux (hors LLM) pour éviter toute
-    corruption du base64.
+    l'agent writer (et autres agents qui retournent des artifacts type document).
+
+    Émet du HTML `<a download="...">` (pas du markdown `[txt](url)`) car les
+    navigateurs traitent un markdown link vers un data-URI comme une NAVIGATION
+    (qui peut afficher inline ou échouer) — alors que l'attribut `download="..."`
+    force un vrai téléchargement avec le bon filename. OWUI préserve les `<a>`
+    avec leurs attributs lors du rendu Markdown→HTML.
 
     Header dédié (`## 📎 Pièces jointes`) + séparateur visuel pour que le bloc soit
-    clairement détectable même après une longue prose de synthèse — évite la
-    confusion « est-ce que le lien est là ? » quand le LLM paraphrase la note du
-    writer sans inclure d'URL.
+    clairement détectable même après une longue prose de synthèse.
     """
     rows: list[str] = []
     for a in artifacts:
@@ -1713,7 +1752,14 @@ def _build_document_links(artifacts: list[dict]) -> str:
             continue
         mime = a.get("mime", "application/octet-stream")
         data_uri = f"data:{mime};base64,{b64}"
-        rows.append(f"- 📎 **[{filename}]({data_uri})** — {fmt}, {size}")
+        # `download="..."` force le téléchargement avec le bon filename ; sans
+        # cet attribut, le navigateur tente de naviguer vers le data-URI ce qui
+        # affiche inline ou échoue selon le MIME. C'est LA différence qui fait
+        # que les fichiers se téléchargent vraiment.
+        rows.append(
+            f'- <a href="{data_uri}" download="{filename}">📎 <strong>{filename}</strong></a> '
+            f'<span style="opacity:0.7">— {fmt}, {size}</span>'
+        )
     if not rows:
         return ""
     return "\n\n---\n\n## 📎 Pièces jointes\n\n" + "\n".join(rows) + "\n"

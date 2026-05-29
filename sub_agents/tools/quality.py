@@ -299,6 +299,55 @@ _COMPLEMENT_MAP: dict[str, str] = {
 }
 
 
+def build_bibliography(citations: list[dict], agent_confidence: dict | None = None) -> str:
+    """Construit un bloc Markdown de bibliographie enrichie pour l'utilisateur·rice.
+
+    Format pour chaque entrée :
+      [^N]: 🟢 [Titre](url) — autorité 0.92 · agent web (confiance 0.78)
+
+    Le préfixe `[^N]:` correspond à la convention footnote Markdown — si la
+    synthèse Alyx utilise les marqueurs `[^N]` inline, OWUI les lie automatiquement
+    aux entrées de cette bibliographie. Sinon, le bloc reste lisible comme un
+    plain « ## Sources » numéroté.
+
+    Args:
+        citations: liste de dicts {url, title, snippet} (cf. _extract_citations)
+        agent_confidence: dict optionnel agent → confidence pour afficher la
+                          confiance de l'agent ayant fourni chaque source
+
+    Returns: chaîne Markdown commençant par `\n\n---\n\n## 📚 Sources\n...`, ou ""
+    """
+    if not citations:
+        return ""
+
+    # Heuristique simple pour deviner quel agent a fourni quelle source : on
+    # cherche le nom du domaine dans les sorties agents (déjà fait en amont
+    # via _extract_citations qui itère sur web/wikipedia/doc/rag/geo/media).
+    # Pour l'instant on n'a pas l'info exacte ; on affiche juste le score
+    # d'autorité du domaine, et on laisse la confiance globale en footer si fournie.
+
+    lines = ["", "---", "", "## 📚 Sources", ""]
+    for i, c in enumerate(citations, 1):
+        url = c.get("url", "")
+        title = c.get("title", "")[:100] or url
+        score = score_url_authority(url)
+        emoji = authority_emoji(score)
+        lines.append(
+            f"[^{i}]: {emoji} [{title}]({url}) — autorité {score:.2f}"
+        )
+
+    if agent_confidence:
+        avg_c = avg_confidence(agent_confidence)
+        if avg_c is not None:
+            lines.append("")
+            lines.append(
+                f"> *Confiance moyenne des agents ayant collecté ces sources : "
+                f"{authority_emoji(avg_c)} {avg_c:.2f}*"
+            )
+
+    return "\n".join(lines) + "\n"
+
+
 def pick_complement_agent(factual_agents_run: set[str], already_run: set[str]) -> str | None:
     """Pour un set d'agents factuels exécutés, propose un agent complémentaire
     à spawner pour augmenter la diversité de sources. Returns None si
