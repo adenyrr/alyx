@@ -36,6 +36,11 @@ class AlyxState(TypedDict):
     # Images base64 extraites du message courant par la pipeline
     images_b64: list[str]
 
+    # Audios base64 extraits du message courant (formats variés : mp3, wav, m4a, ogg)
+    # Format identique à images_b64 : juste la partie base64 (sans le prefix data:).
+    # Consommé par l'agent `audio` (transcription locale via whisper).
+    audios_b64: list[str]
+
     # Date courante injectée par la pipeline (ex: "samedi 7 mars 2026")
     current_date: str
 
@@ -50,6 +55,12 @@ class AlyxState(TypedDict):
 
     # Sorties brutes de chaque agent invoqué — merge reducer pour le fan-out parallèle
     agent_outputs: Annotated[dict[str, str], _merge_dicts]
+
+    # Score de confiance par agent (0.0 → 1.0). Convention : 0.9+ = certitude
+    # (peer-reviewed, source officielle), 0.6-0.9 = solide (wikipedia, source web
+    # crédible), 0.3-0.6 = à vérifier, < 0.3 = très incertain. Optionnel : un agent
+    # qui n'écrit rien laisse Alyx traiter sa sortie sans pondération.
+    agent_confidence: Annotated[dict[str, float], _merge_dicts]
 
     # Métriques de tokens par agent — merge reducer (clé spéciale "_synthesis" pour Alyx)
     agent_metrics: Annotated[dict[str, dict], _merge_dicts]
