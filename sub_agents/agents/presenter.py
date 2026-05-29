@@ -24,7 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from tools.context7_client import get_library_docs, resolve_library_id
-from tools.skills_loader import find_relevant as find_relevant_skills
+from tools.skills_loader import find_relevant as find_relevant_skills, get_skill
 
 if TYPE_CHECKING:
     from graph.state import AlyxState
@@ -129,7 +129,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             "## Data retrieved by previous agents (USE THIS as your content source)\n" + prior_text
         )
 
-    # 1. Skill reveal-slides (obligatoire)
+    # 1a. Design system (tokens partagés — applicables même dans reveal.js)
+    design_skill = get_skill("design-system")
+    if design_skill:
+        context_parts.append(
+            f"## Design system (appliquer les tokens couleurs/typo, surcharger les defaults reveal.js)\n{design_skill}"
+        )
+
+    # 1b. Skill reveal-slides (obligatoire)
     await _emit("📚 Skill reveal-slides…")
     skill_hits = find_relevant_skills(user_text, agent="presenter")
     if skill_hits:

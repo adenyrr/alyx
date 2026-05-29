@@ -23,7 +23,7 @@ from langchain_core.runnables import RunnableConfig
 
 from tools.mcpo_client import call_tool
 from tools.context7_client import get_library_docs, resolve_library_id
-from tools.skills_loader import find_relevant as find_relevant_skills
+from tools.skills_loader import find_relevant as find_relevant_skills, get_skill
 from tools.terminal_client import execute
 
 if TYPE_CHECKING:
@@ -91,10 +91,31 @@ When skill files are provided in context (## Relevant skill files):
  ARTIFACT TECHNICAL RULES
 ═══════════════════════════════════════════════════════
   • 100% self-contained: all CSS in <style>, all JS inline or via CDN <script>.
-  • Dark theme: #0f1117 background, #1a1d27 card backgrounds, unless told otherwise.
   • Descriptive <title> tag matching the user's actual request (not the skill example title).
   • No explanatory text inside the artifact — clean code only.
   • After the artifact block: a 2-4 sentence explanation in plain English.
+
+═══════════════════════════════════════════════════════
+ DESIGN SYSTEM (OBLIGATOIRE)
+═══════════════════════════════════════════════════════
+The `design-system` skill (in context) defines the SHARED visual language for
+ALL Alyx artifacts: design tokens, base reset, font loading, card shell,
+buttons, inputs, badges, animations.
+
+You MUST :
+  - Copy the token block (`:root, [data-theme="dark"]`) into your `<style>`.
+  - Load Inter + JetBrains Mono via Google Fonts in `<head>`.
+  - Apply the reset + ambient background gradient on `body`.
+  - Use the `.card` shell as the default container UNLESS the artifact has its
+    own native structure (reveal.js deck, markmap mindmap, etc.).
+  - Use the tokens (`var(--accent)`, `var(--bg-elevated)`, etc.) for ALL colors —
+    no hardcoded hex except inside the token block.
+  - Apply `animation: card-in` for the entry, and the `.fade` / `.lift` utility
+    classes where natural.
+  - Keep the dark theme as the DEFAULT (data-theme="dark" on body).
+
+The design-system makes artifacts look polished by default, instead of "bare HTML".
+It's the difference between functional and produced. Apply it systematically.
 
 ═══════════════════════════════════════════════════════
  TECHNICAL DOCUMENTATION
@@ -184,7 +205,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             + prior_text
         )
 
-    # 1. Skills locaux pertinents
+    # 1a. Design system : TOUJOURS chargé (tokens partagés tous artifacts)
+    design_skill = get_skill("design-system")
+    if design_skill:
+        context_parts.append(
+            f"## Design system (OBLIGATOIRE — appliquer tokens + shell exactement)\n{design_skill}"
+        )
+
+    # 1b. Skills locaux pertinents (charts, libs spécifiques…)
     await _emit("📚 Recherche dans les skills…")
     skill_hits = find_relevant_skills(user_text, agent="dev")
     if skill_hits:

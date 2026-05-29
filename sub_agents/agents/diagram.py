@@ -22,7 +22,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from tools.skills_loader import find_relevant as find_relevant_skills
+from tools.skills_loader import find_relevant as find_relevant_skills, get_skill
 from tools.text_utils import last_user_message
 
 if TYPE_CHECKING:
@@ -105,6 +105,13 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             for name, content in prior_outputs.items()
         )
         context_parts.append("## Data from previous agents\n" + prior_text)
+
+    # Design system (tokens couleurs/typo — applicables à mermaid theme + shells)
+    design_skill = get_skill("design-system")
+    if design_skill:
+        context_parts.append(
+            f"## Design system (tokens à utiliser pour les couleurs du diagramme + shell)\n{design_skill}"
+        )
 
     # Skills : on demande le skill du type détecté (fallback dev pool)
     skill_hits = find_relevant_skills(diagram_type, agent="diagram") \

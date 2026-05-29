@@ -24,10 +24,11 @@ modifications sur disque sont prises en compte au prochain rebuild du graphe
 from __future__ import annotations
 
 import re
+import os
 from pathlib import Path
 from typing import Iterable
 
-_SKILLS_DIR = Path("/app/pipelines/skills")
+_SKILLS_DIR = Path(os.environ.get("ALYX_SKILLS_DIR", "/app/pipelines/skills"))
 
 # Mots-clés très fréquents — exclus du scoring sémantique pour ne pas
 # polluer les correspondances.
@@ -114,6 +115,26 @@ def _ensure_loaded() -> dict[str, list[_Skill]]:
     if _cache_by_agent is None:
         _cache_by_agent = _load()
     return _cache_by_agent
+
+
+def get_skill(name: str) -> str | None:
+    """Retourne le contenu d'un skill par son nom exact. None si introuvable.
+
+    Utile quand un agent veut TOUJOURS charger un skill spécifique (ex. le
+    design-system) en plus de ceux remontés par `find_relevant`. Évite les
+    aléas du scoring de pertinence pour les skills « foundation ».
+    """
+    cache = _ensure_loaded()
+    seen: set[int] = set()
+    for skills in cache.values():
+        for s in skills:
+            sid = id(s)
+            if sid in seen:
+                continue
+            seen.add(sid)
+            if s.name == name:
+                return s.content
+    return None
 
 
 def _query_tokens(query: str) -> set[str]:

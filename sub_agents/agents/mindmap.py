@@ -17,7 +17,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from tools.skills_loader import find_relevant as find_relevant_skills
+from tools.skills_loader import find_relevant as find_relevant_skills, get_skill
 from tools.text_utils import last_user_message
 
 if TYPE_CHECKING:
@@ -76,6 +76,13 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         )
         context_parts.append(
             "## Data from previous agents (USE THIS as primary content)\n" + prior_text
+        )
+
+    # Design system (tokens partagés)
+    design_skill = get_skill("design-system")
+    if design_skill:
+        context_parts.append(
+            f"## Design system (tokens couleurs/typo à utiliser sur le shell)\n{design_skill}"
         )
 
     # Skill markmap (obligatoire — sans ça, l'agent invente du HTML qui peut ne pas marcher)
