@@ -237,6 +237,54 @@ _MIME_TYPES: dict[str, str] = {
     "rtf":   "application/rtf",
 }
 
+# Extension de fichier par format. Par défaut on prend la clé du format ; certaines
+# valeurs canoniques diffèrent (latex → .tex est la convention universelle).
+_FORMAT_EXTENSIONS: dict[str, str] = {
+    "latex": "tex",
+}
+
+
+def _extract_title(markdown: str) -> str:
+    """Extrait un titre depuis le markdown : 1) YAML front matter `title:`, sinon
+    2) premier H1, sinon 3) "Document" par défaut. Utilisé pour les formats qui
+    exigent un title metadata (epub).
+    """
+    yaml = re.match(r"^---\s*\n(.*?)\n---\s*\n", markdown, re.DOTALL)
+    if yaml:
+        title_in_yaml = re.search(r"^title:\s*(.+)$", yaml.group(1), re.MULTILINE)
+        if title_in_yaml:
+            return title_in_yaml.group(1).strip().strip('"\'')
+    h1 = re.search(r"^#\s+(.+?)$", markdown, re.MULTILINE)
+    if h1:
+        return h1.group(1).strip()
+    return "Document"
+
+
+def _yaml_has_title(markdown: str) -> bool:
+    """Vrai si le markdown a un YAML front matter avec une clé `title:`."""
+    yaml = re.match(r"^---\s*\n(.*?)\n---\s*\n", markdown, re.DOTALL)
+    return bool(yaml and re.search(r"^title:\s*\S", yaml.group(1), re.MULTILINE))
+
+
+def _pandoc_extra_args(markdown: str, fmt: str) -> list[str]:
+    """Arguments pandoc spécifiques par format de sortie.
+
+    - pptx : --slide-level=1 (chaque # = nouvelle slide)
+    - html / latex : --standalone (sinon pandoc émet un FRAGMENT, pas un fichier
+      autonome — incompréhensible pour l'utilisateur·rice qui télécharge)
+    - epub : --metadata title=... en fallback si le markdown n'a pas de
+      `title:` dans son YAML front matter (sinon pandoc avertit/échoue)
+    """
+    if fmt == "pptx":
+        return ["--slide-level=1"]
+    if fmt in ("html", "latex"):
+        return ["--standalone"]
+    if fmt == "epub":
+        if not _yaml_has_title(markdown):
+            return ["--metadata", f"title={_extract_title(markdown)}"]
+        return []
+    return []
+
 
 def _detect_format(text: str) -> str | None:
     for fmt, pattern in _FORMAT_PATTERNS:
@@ -385,14 +433,13 @@ async def _convert_via_pypandoc(markdown: str, fmt: str) -> dict | None:
     thread via asyncio.to_thread pour ne pas bloquer la boucle event-loop.
     """
     _EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"writer-{uuid.uuid4().hex[:12]}.{fmt}"
+    # Extension canonique : latex → .tex, autres → identique au format key.
+    ext = _FORMAT_EXTENSIONS.get(fmt, fmt)
+    filename = f"writer-{uuid.uuid4().hex[:12]}.{ext}"
     output_path = _EXPORTS_DIR / filename
 
-    # PPTX : on force `--slide-level=1` pour que chaque `#` produise une nouvelle
-    # slide, sans dépendre de l'auto-détection de pandoc (qui peut empiler tout
-    # le contenu sur 1 slide si elle juge mal le niveau). Cohérent avec le
-    # `_SLIDE_MODE_SYSTEM` du writer qui n'utilise QUE des H1.
-    extra_args: list[str] = ["--slide-level=1"] if fmt == "pptx" else []
+    # Arguments pandoc spécifiques au format (slide-level, standalone, metadata…).
+    extra_args = _pandoc_extra_args(markdown, fmt)
 
     def _convert_blocking() -> None:
         import pypandoc  # lazy : ~150 Mo bundle, ne charge qu'à la demande
