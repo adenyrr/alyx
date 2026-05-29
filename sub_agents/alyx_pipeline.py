@@ -1,7 +1,7 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.7.0
+version: 0.8.0
 requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, pypandoc-binary>=1.13, openpyxl>=3.1, openai>=1.0, pydantic>=2.0
 """
 
@@ -473,6 +473,10 @@ class Pipeline:
         memory_always_on: bool = Field(default=True, description="Consulter l'agent memory automatiquement à chaque tour (en parallèle phase 1) pour enrichir le contexte sans surcoût UX")
         enable_critic_loop: bool = Field(default=False, description="Pass adversarial post-phase 1 : fact_checker vérifie les claims des autres agents avant synthèse. Coût ~3-5s mais gain qualité radical.")
         critic_confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0, description="Seuil de confiance fact_checker en dessous duquel un avertissement est ajouté à la synthèse")
+        auto_factcheck_low_confidence: bool = Field(default=True, description="Auto-déclenche fact_checker si la confiance moyenne phase 1 < critic_confidence_threshold")
+        auto_factcheck_high_stakes: bool = Field(default=True, description="Auto-déclenche fact_checker si la question contient des mots-clés à enjeux (santé / légal / financier / scientifique)")
+        inject_confidence_in_synthesis: bool = Field(default=True, description="Passer le bloc de confiance par agent à la synthèse Alyx pour pondération des claims")
+        enrich_citations_authority: bool = Field(default=True, description="Ajouter un badge d'autorité (🟢🟡🟠🔴) à chaque source citée selon la fiabilité du domaine")
         writer_reference_docx: str = Field(default="", description="Chemin (dans le conteneur) vers un template DOCX de référence (--reference-doc) pour brander les sorties writer")
         writer_reference_pptx: str = Field(default="", description="Chemin vers un template PPTX de référence pour brander les sorties writer/presenter pptx")
         embed_html_inline: bool = Field(default=True, description="Rendre les artifacts HTML de l'agent dev en iframe inline (event `embeds` OpenWebUI) au lieu de blocs de code markdown (panneau Artifacts)")
@@ -848,24 +852,29 @@ class Pipeline:
         agent_outputs: dict[str, str] = {}
         artifacts: list[dict] = []
         agent_metrics: dict[str, dict] = {}
+        agent_confidence: dict[str, float] = {}
         t0 = time.perf_counter()
         # Mistral ne supporte pas le paramètre enable_thinking
         is_mistral = "mistral" in eff_alyx_model.lower()
         extra_body: dict = {} if (model_reasoning_enabled or is_mistral) else {"enable_thinking": False}
         try:
             # ── Cache exact (Redis) puis cache sémantique (Qdrant) ────────
+            # MULTI-USER SAFE : toutes les clés et toutes les recherches sont
+            # scoped par user_id pour empêcher la fuite croisée entre comptes.
             cache_hit = False
             cache_key = None
             embedding: list | None = None
+            owui_ctx = initial_state.get("_owui") or {}
+            cache_user_id = str(owui_ctx.get("user_id") or "").strip()
             from tools import cache as _agent_cache
             if self.valves.enable_agent_cache or self.valves.enable_semantic_cache:
-                cache_key = _agent_cache.cache_key(user_message)
+                cache_key = _agent_cache.cache_key(user_message, user_id=cache_user_id)
                 # 1. Exact match (Redis) — moins cher, à essayer en premier
                 if self.valves.enable_agent_cache:
                     cached = await _agent_cache.get(self.valves.redis_url, cache_key)
                     if cached:
                         await _emit("⚡ Réponse depuis le cache (exact)")
-                        agent_outputs, artifacts, agent_metrics = cached, [], {}
+                        agent_outputs, artifacts, agent_metrics, agent_confidence = cached, [], {}, {}
                         cache_hit = True
                 # 2. Cache sémantique (Qdrant) si exact a miss
                 if not cache_hit and self.valves.enable_semantic_cache:
@@ -882,6 +891,7 @@ class Pipeline:
                             collection=self.valves.semantic_cache_collection,
                             embedding=embedding,
                             threshold=self.valves.semantic_cache_threshold,
+                            user_id=cache_user_id,
                         )
                         if cached:
                             await _emit("⚡ Réponse depuis le cache (sémantique)")
@@ -891,11 +901,14 @@ class Pipeline:
             if not cache_hit:
                 await _emit("🧭 Routage de la demande…")
                 # Exécuter le graphe
-                agent_outputs, artifacts, agent_metrics = await self._run_graph(
+                agent_outputs, artifacts, agent_metrics, agent_confidence = await self._run_graph(
                     graph, initial_state, config, event_emitter, models=models,
                     max_phases=self.valves.max_phases,
                     memory_always_on=self.valves.memory_always_on,
                     enable_critic_loop=self.valves.enable_critic_loop,
+                    auto_factcheck_low_confidence=self.valves.auto_factcheck_low_confidence,
+                    auto_factcheck_high_stakes=self.valves.auto_factcheck_high_stakes,
+                    critic_confidence_threshold=self.valves.critic_confidence_threshold,
                 )
                 # Mémoriser si le tour est sûr à cacher
                 if cache_key and _agent_cache.is_cacheable(agent_outputs, artifacts):
@@ -910,6 +923,7 @@ class Pipeline:
                             collection=self.valves.semantic_cache_collection,
                             embedding=embedding,
                             agent_outputs=agent_outputs,
+                            user_id=cache_user_id,
                         )
             if reasoning_emitter and self.valves.show_reasoning:
                 await reasoning_emitter("", True)
@@ -994,13 +1008,19 @@ class Pipeline:
 
             # Synthèse finale
             # Émettre les citations source (OpenWebUI cartes persistantes)
+            # avec, si valve activée, un badge d'autorité du domaine (🟢🟡🟠🔴).
             if event_emitter:
+                from tools.quality import score_url_authority, authority_emoji
                 for citation in _extract_citations(agent_outputs):
+                    title = citation["title"]
+                    if self.valves.enrich_citations_authority:
+                        score = score_url_authority(citation["url"])
+                        title = f"{authority_emoji(score)} {title} · autorité {score:.2f}"
                     try:
                         await event_emitter({"type": "source", "data": {
                             "document": [citation["snippet"]],
                             "metadata": [{"source": citation["url"]}],
-                            "source": {"name": citation["title"], "url": citation["url"]},
+                            "source": {"name": title, "url": citation["url"]},
                         }})
                     except Exception:
                         pass
@@ -1063,6 +1083,12 @@ class Pipeline:
 
             await _emit("✍️ Rédaction de la réponse…")
             synthesis_context = _build_synthesis_context(agent_outputs, artifacts)
+            # Injection du bloc de confiance par agent : Alyx pondère ses claims.
+            if self.valves.inject_confidence_in_synthesis and agent_confidence:
+                from tools.quality import format_confidence_block
+                conf_block = format_confidence_block(agent_confidence)
+                if conf_block:
+                    synthesis_context = synthesis_context + "\n\n" + conf_block
             synth_messages = [{"role": "system", "content": _ALYX_SYSTEM_TEMPLATE.format(
                 current_date=datetime.now().strftime("%A %d %B %Y"),
                 language=eff_language,
@@ -1334,8 +1360,12 @@ class Pipeline:
     async def _run_graph(graph, initial_state: dict, config: dict, event_emitter=None,
                          models: dict | None = None, max_phases: int = 2,
                          memory_always_on: bool = True,
-                         enable_critic_loop: bool = False):
+                         enable_critic_loop: bool = False,
+                         auto_factcheck_low_confidence: bool = True,
+                         auto_factcheck_high_stakes: bool = True,
+                         critic_confidence_threshold: float = 0.6):
         agent_outputs: dict[str, str] = {}
+        agent_confidence: dict[str, float] = {}
         artifacts: list[dict] = []
         agent_metrics: dict[str, dict] = {}
         pending: set[str] = set()
@@ -1359,6 +1389,7 @@ class Pipeline:
             agent_outputs.update(node_output.get("agent_outputs", {}))
             artifacts.extend(node_output.get("artifacts", []))
             agent_metrics.update(node_output.get("agent_metrics", {}))
+            agent_confidence.update(node_output.get("agent_confidence", {}))
 
             if event_emitter:
                 for _n, out_text in node_output.get("agent_outputs", {}).items():
@@ -1398,14 +1429,28 @@ class Pipeline:
                 await _handle_agent_output(node_name, node_output)
 
         # ── Critic loop : vérification adversariale post-phase 1 ──────────────
-        # Lance fact_checker SI valve activée ET pas déjà routé. Le résultat
-        # rejoint agent_outputs comme tout autre agent — la synthèse Alyx le
-        # voit et pondère ses claims en conséquence.
-        if (enable_critic_loop and agent_outputs
-                and "fact_checker" not in agent_outputs):
+        # Trois portes d'entrée :
+        #   1. Valve enable_critic_loop : toujours-on (coûteux mais maximal)
+        #   2. auto_factcheck_low_confidence + confidence moyenne < seuil
+        #   3. auto_factcheck_high_stakes + question à enjeux (santé/légal/finance/science)
+        # Le résultat rejoint agent_outputs comme tout autre agent.
+        from tools.quality import should_auto_factcheck
+        user_text_for_check = _last_human_text(initial_state.get("messages", []))
+        trigger_fc = enable_critic_loop and "fact_checker" not in agent_outputs and agent_outputs
+        trigger_reason = "valve enable_critic_loop"
+        if not trigger_fc and "fact_checker" not in agent_outputs:
+            auto_trigger, reason = should_auto_factcheck(
+                user_text_for_check, agent_outputs, agent_confidence,
+                critic_threshold=critic_confidence_threshold,
+                high_stakes_only=auto_factcheck_high_stakes and not auto_factcheck_low_confidence,
+            )
+            if auto_trigger and (auto_factcheck_low_confidence or auto_factcheck_high_stakes):
+                trigger_fc = True
+                trigger_reason = reason
+        if trigger_fc:
             import agents.fact_checker as _fc_mod
             try:
-                await _emit("🔬 Vérification adversariale…")
+                await _emit(f"🔬 Vérification adversariale ({trigger_reason})")
                 fc_state = {**initial_state, "agent_outputs": dict(agent_outputs)}
                 fc_result = await asyncio.wait_for(
                     _fc_mod.run(fc_state, config=config, model=(models or {}).get("fact_checker")),
@@ -1414,6 +1459,7 @@ class Pipeline:
                 if isinstance(fc_result, dict):
                     agent_outputs.update(fc_result.get("agent_outputs", {}))
                     agent_metrics.update(fc_result.get("agent_metrics", {}))
+                    agent_confidence.update(fc_result.get("agent_confidence", {}))
             except (asyncio.TimeoutError, Exception):
                 pass  # best-effort
 
@@ -1484,7 +1530,7 @@ class Pipeline:
                 current_next = []
             phase_idx += 1
 
-        return agent_outputs, artifacts, agent_metrics
+        return agent_outputs, artifacts, agent_metrics, agent_confidence
 
 
 async def _emit_event(event_emitter, event_type: str, data: dict[str, Any]) -> None:
