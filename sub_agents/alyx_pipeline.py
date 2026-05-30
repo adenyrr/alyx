@@ -1,7 +1,7 @@
 """
 title: Alyx
 author: adenyrr
-version: 0.9.0
+version: 0.9.1
 requirements: langgraph>=0.2, langchain-core>=0.3, langchain-openai>=0.2, langgraph-checkpoint-postgres, psycopg[pool], httpx>=0.27, mcp, redis>=5.0, pypandoc-binary>=1.13, openpyxl>=3.1, openai>=1.0, pydantic>=2.0
 """
 
@@ -559,10 +559,13 @@ class Pipeline:
         enable_model_autoselect: bool = Field(default=True, description="Basculer sur un modèle cheap pour les requêtes triviales (salutations, accusés de réception)")
         enable_prewarming: bool = Field(default=True, description="Pré-chauffer les connexions LiteLLM au démarrage (réduit la latence du premier tour)")
 
-        # --- Pièces jointes natives (writer) ---
-        enable_native_file_attachments: bool = Field(default=False, description="Uploader les documents writer vers Open WebUI et les attacher en pièce jointe native (event `files`) au lieu d'un lien data-URI. Nécessite webui_url + webui_api_key")
-        webui_url: str = Field(default=_WEBUI_URL, description="URL interne d'Open WebUI (pour l'upload de fichiers natifs)")
-        webui_api_key: str = Field(default=_WEBUI_API_KEY, description="Clé API Open WebUI (Bearer) pour l'upload de fichiers natifs")
+        # --- Pièces jointes natives (writer / dev / presenter / mindmap / diagram) ---
+        # IMPORTANT : par défaut ON. Les data-URI ne fonctionnent PAS dans Open WebUI
+        # (DOMPurify sanitise les `href="data:..."`), donc le fallback markdown link
+        # est cassé. La SEULE voie fiable est l'upload natif via l'API OWUI.
+        enable_native_file_attachments: bool = Field(default=True, description="Uploader les documents/artifacts vers Open WebUI et les attacher en pièce jointe native (event `files`). REQUIS pour que les téléchargements fonctionnent — les data-URI sont sanitisés par OWUI.")
+        webui_url: str = Field(default=_WEBUI_URL, description="URL interne d'Open WebUI (défaut http://open-webui:8080 — accessible depuis le réseau Docker)")
+        webui_api_key: str = Field(default=_WEBUI_API_KEY, description="Clé API Open WebUI (Settings → Account → API Keys). Sans elle, AUCUN téléchargement de fichier ne fonctionne — un message d'erreur explicite est ajouté à la réponse.")
 
         # --- Limites de sources par agent (injectées via state._sources) ---
         sources_web_ddg_max:         int = Field(default=5, ge=1, le=10, description="Web — nombre max de résultats DuckDuckGo bruts")
@@ -1043,9 +1046,13 @@ class Pipeline:
             # Synthèse finale
             # Émettre les citations source (OpenWebUI cartes persistantes)
             # avec, si valve activée, un badge d'autorité du domaine (🟢🟡🟠🔴).
+            # FILTRE : on exclut les CDN/assets (jsdelivr, unpkg, fonts.google…)
+            # qui ne sont pas de vraies sources documentaires.
             if event_emitter:
-                from tools.quality import score_url_authority, authority_emoji
+                from tools.quality import score_url_authority, authority_emoji, is_cdn_or_asset
                 for citation in _extract_citations(agent_outputs):
+                    if is_cdn_or_asset(citation["url"]):
+                        continue  # CDN d'une lib JS/CSS → pas une source
                     title = citation["title"]
                     if self.valves.enrich_citations_authority:
                         score = score_url_authority(citation["url"])
@@ -1169,15 +1176,14 @@ class Pipeline:
             # DIRECTEMENT depuis les artifacts, JAMAIS via le LLM de synthèse :
             # le base64 ne doit pas transiter par le modèle (reproduction
             # corrompue/tronquée d'un long base64).
-            # Pièces jointes : on émet TOUJOURS le bloc data-URI (baseline fiable
-            # qui marche partout). L'upload natif Open WebUI, si activé, s'ajoute
-            # en bonus (puce de fichier dans la barre de message). Pas d'« exclusive
-            # or » : si le natif marche, l'utilisateur a chip + lien ; si le natif
-            # rate silencieusement, il a au moins le lien.
-            doc_links = _build_document_links(artifacts)
-            if doc_links:
-                q.put(doc_links)
-            await _emit_writer_attachments(event_emitter, self.valves, artifacts)
+            # Pièces jointes : OWUI sanitise les data-URI, donc upload natif via API.
+            # 1. Tenter l'upload natif (event `files`) — c'est la SEULE voie qui marche
+            # 2. Si KO (pas de WEBUI_API_KEY), émettre un bloc d'erreur ACTIONABLE
+            #    plutôt qu'un lien data-URI qui serait silencieusement cassé
+            attached_natively = await _emit_writer_attachments(event_emitter, self.valves, artifacts)
+            doc_summary = _build_document_links(artifacts, native_attach_active=attached_natively)
+            if doc_summary:
+                q.put(doc_summary)
 
             # Bibliographie auto-construite : bloc de sources numérotées avec
             # badges d'autorité. Auto-construit côté pipeline (pas le LLM) →
@@ -1724,45 +1730,60 @@ def _strip_think_tags(text: str) -> str:
     ).strip()
 
 
-def _build_document_links(artifacts: list[dict]) -> str:
+def _build_document_links(artifacts: list[dict], native_attach_active: bool = False) -> str:
     """
-    Construit le bloc de téléchargement data-URI pour les documents produits par
-    l'agent writer (et autres agents qui retournent des artifacts type document).
+    Construit le bloc de résumé des documents produits.
 
-    Émet du HTML `<a download="...">` (pas du markdown `[txt](url)`) car les
-    navigateurs traitent un markdown link vers un data-URI comme une NAVIGATION
-    (qui peut afficher inline ou échouer) — alors que l'attribut `download="..."`
-    force un vrai téléchargement avec le bon filename. OWUI préserve les `<a>`
-    avec leurs attributs lors du rendu Markdown→HTML.
+    IMPORTANT — Open WebUI sanitise les URI `data:` dans les anchors (DOMPurify
+    sécurité XSS), donc AUCUN lien data-URI inline ne peut fonctionner — peu
+    importe le format markdown ou HTML. La SEULE voie fiable est l'upload natif
+    via l'API OWUI (event `files` après POST /api/v1/files/), géré par
+    `_emit_writer_attachments` AVANT cet appel.
 
-    Header dédié (`## 📎 Pièces jointes`) + séparateur visuel pour que le bloc soit
-    clairement détectable même après une longue prose de synthèse.
+    Ce helper :
+      - Si `native_attach_active=True` (upload natif réussi), retourne "" : le
+        chip natif suffit, pas besoin de doublon textuel.
+      - Sinon, retourne un BLOC D'ERREUR ACTIONABLE qui explique :
+        * le fichier a été généré côté pipelines
+        * il vaut où sur le volume `mcp_exports` (accessible dans le conteneur)
+        * pour avoir des téléchargements cliquables, configurer WEBUI_API_KEY
     """
-    rows: list[str] = []
-    for a in artifacts:
-        if not isinstance(a, dict) or a.get("type") != "document":
-            continue
+    docs = [a for a in artifacts if isinstance(a, dict) and a.get("type") == "document"]
+    if not docs:
+        return ""
+
+    # Cas 1 : upload natif a marché → on dit rien (les chips OWUI sont déjà là)
+    if native_attach_active:
+        return ""
+
+    # Cas 2 : upload natif KO ou désactivé → message d'erreur explicite
+    lines = ["", "---", "", "## ⚠️ Téléchargements indisponibles", ""]
+    for a in docs:
         filename = a.get("filename", "document")
         fmt = str(a.get("format", "")).upper()
         size = a.get("size_label", "")
         b64 = a.get("base64")
         if not b64:
-            # Artifact incomplet : on signale plutôt que de rester silencieux.
-            rows.append(f"- ⚠️ **{filename}** ({fmt}) — base64 manquant, conversion probablement échouée")
+            lines.append(f"- ❌ **{filename}** ({fmt}) — conversion échouée (base64 manquant)")
             continue
-        mime = a.get("mime", "application/octet-stream")
-        data_uri = f"data:{mime};base64,{b64}"
-        # `download="..."` force le téléchargement avec le bon filename ; sans
-        # cet attribut, le navigateur tente de naviguer vers le data-URI ce qui
-        # affiche inline ou échoue selon le MIME. C'est LA différence qui fait
-        # que les fichiers se téléchargent vraiment.
-        rows.append(
-            f'- <a href="{data_uri}" download="{filename}">📎 <strong>{filename}</strong></a> '
-            f'<span style="opacity:0.7">— {fmt}, {size}</span>'
+        lines.append(
+            f"- 📄 **{filename}** ({fmt}, {size}) — généré, "
+            f"disponible dans le volume `mcp_exports` du conteneur pipelines"
         )
-    if not rows:
-        return ""
-    return "\n\n---\n\n## 📎 Pièces jointes\n\n" + "\n".join(rows) + "\n"
+
+    lines.extend([
+        "",
+        "**Pour activer les téléchargements cliquables** : Open WebUI sanitise les liens "
+        "data-URI inline (sécurité). La seule voie est l'upload natif via l'API OWUI.",
+        "",
+        "Étapes :",
+        "1. Open WebUI → **Settings → Account → API Keys** → générer une clé",
+        "2. Ajouter dans `.env` du stack : `WEBUI_API_KEY=<clé>`",
+        "3. Rebuild : `docker compose up -d --force-recreate pipelines`",
+        "4. Vérifier que la valve `enable_native_file_attachments` est ON dans Functions → Alyx",
+        "",
+    ])
+    return "\n".join(lines)
 
 
 async def _upload_file_to_webui(webui_url: str, api_key: str, filename: str,
