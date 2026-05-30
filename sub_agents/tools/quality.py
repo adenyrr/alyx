@@ -308,6 +308,40 @@ def avg_confidence(agent_confidence: dict[str, float]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
+def avg_confidence_for_agents(agent_confidence: dict[str, float],
+                              agents: set[str] | None) -> float | None:
+    """Moyenne des confidences restreinte à un sous-ensemble d'agents.
+
+    Sert au footer de la bibliographie : on ne veut moyenner QUE les agents qui
+    ont réellement collecté les sources affichées (web/wikipedia/doc/…), et non
+    tous les agents du tour (image_gen, summarizer, vision… émettent souvent 0.0
+    et faussaient la moyenne — cf. le « 0.55 » incohérent avec des sources à 0.9).
+    None si aucune valeur exploitable.
+    """
+    if not agent_confidence or not agents:
+        return None
+    vals = [float(agent_confidence[a]) for a in agents
+            if a in agent_confidence and isinstance(agent_confidence[a], (int, float))]
+    return sum(vals) / len(vals) if vals else None
+
+
+def source_confidence(authority: float, agent_conf: float | None) -> float:
+    """Indice de confiance [0,1] d'UNE source.
+
+    Moyenne géométrique de l'autorité du domaine (fiabilité de la source) et de
+    la confiance auto-déclarée de l'agent qui l'a trouvée : √(autorité · conf).
+    La moyenne géométrique pénalise le maillon faible — une source très fiable
+    rapportée par un agent peu sûr (ou l'inverse) descend, contrairement à une
+    moyenne arithmétique. Si la confiance agent est inconnue, on retombe sur
+    l'autorité du domaine seule.
+    """
+    a = max(0.0, min(1.0, float(authority)))
+    if agent_conf is None or not isinstance(agent_conf, (int, float)):
+        return a
+    c = max(0.0, min(1.0, float(agent_conf)))
+    return (a * c) ** 0.5
+
+
 # ─── Auto-trigger du fact_checker ─────────────────────────────────────────────
 # Agents qui produisent des claims factuels à risque (médical, juridique,
 # scientifique, économique). Si SEUL ces agents tournent en phase 1, le pipeline
@@ -477,7 +511,12 @@ def build_bibliography(citations: list[dict], agent_confidence: dict | None = No
     """Construit un bloc Markdown de bibliographie enrichie pour l'utilisateur·rice.
 
     Format pour chaque entrée :
-      [^N]: 🟢 [Titre](url) — autorité 0.92 · agent web (confiance 0.78)
+      [^N]: 🟢 [Titre](url) — (Indice de confiance : 82%)
+
+    L'indice de confiance par source = √(autorité_domaine · confiance_agent)
+    (cf. source_confidence) : il combine la fiabilité de la source et la
+    confiance de l'agent qui l'a collectée, et le badge 🟢/🟡/🟠/🔴 reflète
+    désormais cet indice (pas l'autorité brute).
 
     Le préfixe `[^N]:` correspond à la convention footnote Markdown — si la
     synthèse Alyx utilise les marqueurs `[^N]` inline, OWUI les lie automatiquement
@@ -485,20 +524,14 @@ def build_bibliography(citations: list[dict], agent_confidence: dict | None = No
     plain « ## Sources » numéroté.
 
     Args:
-        citations: liste de dicts {url, title, snippet} (cf. _extract_citations)
-        agent_confidence: dict optionnel agent → confidence pour afficher la
-                          confiance de l'agent ayant fourni chaque source
+        citations: liste de dicts {url, title, snippet, agent} (cf. _extract_citations)
+        agent_confidence: dict optionnel agent → confidence, utilisé pour pondérer
+                          l'indice de chaque source et pour le footer global
 
     Returns: chaîne Markdown commençant par `\n\n---\n\n## 📚 Sources\n...`, ou ""
     """
     if not citations:
         return ""
-
-    # Heuristique simple pour deviner quel agent a fourni quelle source : on
-    # cherche le nom du domaine dans les sorties agents (déjà fait en amont
-    # via _extract_citations qui itère sur web/wikipedia/doc/rag/geo/media).
-    # Pour l'instant on n'a pas l'info exacte ; on affiche juste le score
-    # d'autorité du domaine, et on laisse la confiance globale en footer si fournie.
 
     # Filtre : on retire les CDN / assets / fonts qui ne sont PAS des sources
     # documentaires (cf. _NOT_A_SOURCE_PATTERNS). Évite que cdn.jsdelivr.net
@@ -507,24 +540,30 @@ def build_bibliography(citations: list[dict], agent_confidence: dict | None = No
     if not real_sources:
         return ""
 
+    conf_map = agent_confidence or {}
     lines = ["", "---", "", "## 📚 Sources", ""]
     for i, c in enumerate(real_sources, 1):
         url = c.get("url", "")
         title = c.get("title", "")[:100] or url
-        score = score_url_authority(url)
-        emoji = authority_emoji(score)
+        agent = c.get("agent")
+        # Indice de confiance = autorité du domaine pondérée par la confiance de
+        # l'agent collecteur (None si l'agent n'a pas déclaré de confiance).
+        conf = source_confidence(score_url_authority(url), conf_map.get(agent))
+        emoji = authority_emoji(conf)
         lines.append(
-            f"[^{i}]: {emoji} [{title}]({url}) — autorité {score:.2f}"
+            f"[^{i}]: {emoji} [{title}]({url}) — (Indice de confiance : {round(conf * 100)}%)"
         )
 
-    if agent_confidence:
-        avg_c = avg_confidence(agent_confidence)
-        if avg_c is not None:
-            lines.append("")
-            lines.append(
-                f"> *Confiance moyenne des agents ayant collecté ces sources : "
-                f"{authority_emoji(avg_c)} {avg_c:.2f}*"
-            )
+    # Footer : moyenne RESTREINTE aux agents ayant réellement produit ces sources
+    # (sinon image_gen/summarizer/… à 0.0 plombaient la moyenne — incohérence).
+    source_agents = {c.get("agent") for c in real_sources if c.get("agent")}
+    avg_c = avg_confidence_for_agents(conf_map, source_agents)
+    if avg_c is not None:
+        lines.append("")
+        lines.append(
+            f"> *Confiance moyenne des agents ayant collecté ces sources : "
+            f"{authority_emoji(avg_c)} {avg_c:.2f}*"
+        )
 
     return "\n".join(lines) + "\n"
 

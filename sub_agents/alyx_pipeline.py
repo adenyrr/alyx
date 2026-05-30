@@ -1049,14 +1049,19 @@ class Pipeline:
             # FILTRE : on exclut les CDN/assets (jsdelivr, unpkg, fonts.google…)
             # qui ne sont pas de vraies sources documentaires.
             if event_emitter:
-                from tools.quality import score_url_authority, authority_emoji, is_cdn_or_asset
+                from tools.quality import score_url_authority, authority_emoji, is_cdn_or_asset, source_confidence
                 for citation in _extract_citations(agent_outputs):
                     if is_cdn_or_asset(citation["url"]):
                         continue  # CDN d'une lib JS/CSS → pas une source
                     title = citation["title"]
                     if self.valves.enrich_citations_authority:
-                        score = score_url_authority(citation["url"])
-                        title = f"{authority_emoji(score)} {title} · autorité {score:.2f}"
+                        # Indice de confiance = autorité du domaine × confiance de
+                        # l'agent collecteur (cohérent avec le bloc 📚 Sources).
+                        conf = source_confidence(
+                            score_url_authority(citation["url"]),
+                            (agent_confidence or {}).get(citation.get("agent")),
+                        )
+                        title = f"{authority_emoji(conf)} {title} · Indice de confiance : {round(conf * 100)}%"
                     try:
                         await event_emitter({"type": "source", "data": {
                             "document": [citation["snippet"]],
@@ -1947,7 +1952,11 @@ def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict
 def _extract_citations(agent_outputs: dict[str, str]) -> list[dict]:
     """
     Extrait les URLs depuis les sorties des agents web, doc et wikipedia.
-    Retourne une liste de {url, title, snippet}, dédupliquée, max 10.
+    Retourne une liste de {url, title, snippet, agent}, dédupliquée, max 10.
+
+    `agent` = nom de l'agent qui a produit la source (web/wikipedia/doc/…).
+    Permet de pondérer l'indice de confiance de chaque source par la confiance
+    auto-déclarée de l'agent collecteur (cf. quality.build_bibliography).
     """
     _url_pattern = re.compile(r"\[([^\]]{1,120})\]\((https?://[^\)]+)\)")
     _bare_url_pattern = re.compile(r"(?<!\()(https?://[^\s\]\)\"',]{10,})")
@@ -1969,7 +1978,7 @@ def _extract_citations(agent_outputs: dict[str, str]) -> list[dict]:
                 idx = text.find(url)
                 start = max(0, idx - 80)
                 snippet = text[start:idx + len(url) + 80].strip()
-                results.append({"url": url, "title": title[:100], "snippet": snippet[:300]})
+                results.append({"url": url, "title": title[:100], "snippet": snippet[:300], "agent": name})
                 if len(results) >= 10:
                     return results
 
@@ -1978,7 +1987,7 @@ def _extract_citations(agent_outputs: dict[str, str]) -> list[dict]:
             url = url.rstrip(".,;:)")
             if url not in seen:
                 seen.add(url)
-                results.append({"url": url, "title": url[:100], "snippet": ""})
+                results.append({"url": url, "title": url[:100], "snippet": "", "agent": name})
                 if len(results) >= 10:
                     return results
 

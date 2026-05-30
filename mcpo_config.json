@@ -77,9 +77,9 @@
     },
 
     "playwright": {
-      "_comment": "Playwright MCP OFFICIEL Microsoft (@playwright/mcp). Le package PyPI mcp-playwright est un fork tiers avec d'autres noms de tools (navigate_to_url, get_text_content) — incompatible avec playwright_client.py qui appelle browser_navigate / browser_snapshot.",
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest"]
+      "_comment": "Playwright MCP OFFICIEL Microsoft, lancé comme service dédié `playwright` (image mcr.microsoft.com/playwright/mcp : Chromium + libs système embarqués). MCPO ne peut PAS lancer @playwright/mcp via npx dans son propre conteneur — l'image mcpo n'a ni navigateur ni dépendances, donc browser_navigate échouait en 500. On s'y connecte en streamable-HTTP. Tools attendus par playwright_client.py : browser_navigate / browser_snapshot. Le fork PyPI mcp-playwright (navigate_to_url, get_text_content) reste incompatible.",
+      "type": "streamable-http",
+      "url": "http://playwright:8931/mcp"
     },
 
     "duckduckgo": {

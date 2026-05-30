@@ -289,6 +289,42 @@ services:
     environment:
       CONTEXT7_API_KEY: "${CONTEXT7_API_KEY:-}"
       OPEN_TERMINAL_API_KEY: "${OPEN_TERMINAL_API_KEY:-}"
+    depends_on:
+      playwright:
+        condition: service_started
+    restart: always
+    networks:
+      - llm-network
+
+  # ──────────────────────────────────────────────
+  # PLAYWRIGHT — navigateur headless (fallback agent web)
+  # ──────────────────────────────────────────────
+
+  playwright:
+    image: mcr.microsoft.com/playwright/mcp:latest
+    container_name: playwright-mcp
+    # L'image officielle embarque Chromium + toutes ses libs système, ce que
+    # l'image mcpo n'a pas (d'où les 500 sur browser_navigate quand MCPO lançait
+    # @playwright/mcp via npx dans son propre conteneur). On la démarre en serveur
+    # MCP streamable-HTTP — et non en stdio — pour que MCPO s'y connecte par URL
+    # (cf. mcpo_config.json → playwright). Invocation recommandée par la doc
+    # @playwright/mcp pour Docker : entrypoint `node /app/cli.js`, --no-sandbox
+    # obligatoire en conteneur (seul headless chromium y est supporté).
+    init: true
+    entrypoint: ["node", "/app/cli.js"]
+    command:
+      - "--headless"
+      - "--browser"
+      - "chromium"
+      - "--no-sandbox"
+      - "--isolated"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8931"
+    # Port interne uniquement — MCPO l'atteint via le réseau Docker.
+    # ports:
+    #   - "8931:8931"
     restart: always
     networks:
       - llm-network
