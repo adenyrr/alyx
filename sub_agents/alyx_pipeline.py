@@ -1168,25 +1168,43 @@ class Pipeline:
                 stream_options={"include_usage": True},
                 extra_body=extra_body,
             )
-            # Anti-doublon : si la bibliographie auto-construite sera ajoutée plus
-            # bas, on coupe EN STREAMING tout bloc « Sources » que le LLM
-            # produirait malgré l'interdiction du prompt (sinon deux blocs Sources
-            # s'affichent). Cf. tools.quality.SourcesGate.
-            from tools.quality import SourcesGate
+            # Anti-doublon EN STREAMING sur la sortie de synthèse :
+            #  • HtmlFenceGate retire les blocs ```html que le LLM régénère malgré
+            #    la consigne — l'artifact est déjà rendu inline (event `embeds`),
+            #    sinon il s'affiche une 2e fois dans le panneau Artifacts natif.
+            #    Actif seulement si embed_html_inline (sinon on VEUT le bloc dans
+            #    le panneau).
+            #  • SourcesGate coupe un bloc « Sources » dupliqué (la bibliographie
+            #    auto-construite est ajoutée plus bas). Cf. tools.quality.
+            from tools.quality import SourcesGate, HtmlFenceGate
+            html_gate = HtmlFenceGate() if self.valves.embed_html_inline else None
             src_gate = SourcesGate() if self.valves.emit_bibliography_block else None
+
+            def _gate_synth(tok: str) -> str:
+                # Ordre : retirer d'abord les blocs ```html, puis les Sources.
+                if html_gate is not None:
+                    tok = html_gate.feed(tok)
+                if tok and src_gate is not None:
+                    tok = src_gate.feed(tok)
+                return tok
+
             async for token in self._astream_response(
                 stream,
                 show_model_reasoning=model_reasoning_enabled,
                 usage_out=synth_usage_out,
                 reasoning_handler=_emit_model_reasoning if model_reasoning_enabled else None,
             ):
-                out_tok = src_gate.feed(token) if src_gate is not None else token
+                out_tok = _gate_synth(token)
                 if out_tok:
                     q.put(out_tok)
+            # Flush ordonné : le reliquat du gate HTML repasse par le gate Sources.
+            tail = html_gate.flush() if html_gate is not None else ""
             if src_gate is not None:
-                tail = src_gate.flush()
                 if tail:
-                    q.put(tail)
+                    tail = src_gate.feed(tail)
+                tail = (tail or "") + src_gate.flush()
+            if tail:
+                q.put(tail)
             await _emit_model_reasoning(final=True)
 
             # Liens de téléchargement des documents (agent writer) — émis

@@ -590,6 +590,81 @@ class SourcesGate:
         return out
 
 
+# ─── Filtre de flux : blocs ```html ───────────────────────────────────────────
+_HTML_FENCE_MARKER = "```html"
+_HTML_FENCE_OPEN_RE = re.compile(r"```html", re.IGNORECASE)
+_HTML_FENCE_FULL_RE = re.compile(r"```html[^\n]*\n.*?```", re.DOTALL | re.IGNORECASE)
+
+
+def _trailing_html_fence_prefix(s: str) -> int:
+    """Longueur du suffixe de `s` qui est un préfixe PARTIEL de ```html
+    (ex. '`', '``', '```', '```h'…). Sert à retenir en streaming un début de
+    fence potentiel sans le laisser fuiter avant de savoir si c'en est un. Le
+    marqueur complet est géré par _HTML_FENCE_OPEN_RE → on s'arrête à len-1.
+    """
+    maxl = min(len(_HTML_FENCE_MARKER) - 1, len(s))
+    for L in range(maxl, 0, -1):
+        if _HTML_FENCE_MARKER.startswith(s[-L:].lower()):
+            return L
+    return 0
+
+
+class HtmlFenceGate:
+    """Filtre de flux qui SUPPRIME les blocs ```html … ``` de la synthèse.
+
+    Les artifacts HTML sont déjà extraits de l'agent dev et rendus en iframe
+    inline (event OpenWebUI `embeds`, cf. valve embed_html_inline). Mais le LLM
+    de synthèse régénère parfois SON PROPRE bloc ```html malgré la consigne — il
+    s'affiche alors une 2e fois dans le panneau Artifacts natif d'OpenWebUI
+    (double rendu). Ce gate retire ces blocs du flux → un seul rendu (inline).
+
+    Conçu pour le streaming token-par-token : la prose passe sans latence ; seul
+    un éventuel bloc ```html est retenu (puis abandonné) le temps d'en voir la
+    fermeture. Les blocs ```python / ```javascript ne sont PAS touchés.
+
+    Usage identique à SourcesGate (feed par token, puis flush en fin de flux).
+    """
+
+    __slots__ = ("_buf",)
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, token: str) -> str:
+        self._buf += token
+        out: list[str] = []
+        # 1) Retirer tout bloc ```html COMPLET présent dans le tampon.
+        while True:
+            full = _HTML_FENCE_FULL_RE.search(self._buf)
+            if not full:
+                break
+            out.append(self._buf[: full.start()])   # prose avant le bloc
+            self._buf = self._buf[full.end():]       # bloc complet abandonné
+        # 2) Bloc ouvert mais pas encore fermé → tout retenir dès l'ouverture.
+        open_m = _HTML_FENCE_OPEN_RE.search(self._buf)
+        if open_m:
+            out.append(self._buf[: open_m.start()])
+            self._buf = self._buf[open_m.start():]
+            return "".join(out)
+        # 3) Pas d'ouverture : ne retenir qu'un suffixe partiel pouvant l'amorcer.
+        hold = _trailing_html_fence_prefix(self._buf)
+        if hold:
+            out.append(self._buf[:-hold])
+            self._buf = self._buf[-hold:]
+        else:
+            out.append(self._buf)
+            self._buf = ""
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Fin de flux : un bloc ```html non fermé est abandonné ; sinon émis."""
+        if _HTML_FENCE_OPEN_RE.search(self._buf):
+            self._buf = ""
+            return ""
+        out, self._buf = self._buf, ""
+        return out
+
+
 def build_bibliography(citations: list[dict], agent_confidence: dict | None = None) -> str:
     """Construit un bloc Markdown de bibliographie enrichie pour l'utilisateur·rice.
 

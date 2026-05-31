@@ -30,6 +30,7 @@ import base64
 import os
 import re
 import uuid
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -266,28 +267,52 @@ def _yaml_has_title(markdown: str) -> bool:
     return bool(yaml and re.search(r"^title:\s*\S", yaml.group(1), re.MULTILINE))
 
 
-def _pandoc_extra_args(markdown: str, fmt: str) -> list[str]:
+def _valid_reference(path: str, ext: str) -> bool:
+    """Vrai si `path` est un template de référence pandoc exploitable.
+
+    Le template (branding via --reference-doc) est ACCESSOIRE : un chemin absent,
+    inexistant, non-fichier, de mauvaise extension ou corrompu est IGNORÉ
+    silencieusement — il ne doit JAMAIS empêcher la production du document
+    (fallback = style pandoc par défaut). Les .docx/.pptx étant des archives ZIP
+    OOXML, on vérifie en amont que le fichier est bien un zip : un fichier
+    présent mais non-docx (chemin mal configuré dans la valve) ferait sinon
+    échouer pandoc et aucun document ne serait produit.
+    """
+    if not path:
+        return False
+    p = Path(path)
+    if not p.is_file() or p.suffix.lower() != f".{ext}":
+        return False
+    try:
+        return zipfile.is_zipfile(p)
+    except OSError:
+        return False
+
+
+def _pandoc_extra_args(markdown: str, fmt: str, use_reference: bool = True) -> list[str]:
     """Arguments pandoc spécifiques par format de sortie.
 
-    - pptx : --slide-level=1 (chaque # = nouvelle slide) + --reference-doc=... si dispo
-    - docx : --reference-doc=... si template configuré (branding entreprise)
+    - pptx : --slide-level=1 (chaque # = nouvelle slide) + --reference-doc=... si valide
+    - docx : --reference-doc=... si template valide (branding entreprise)
     - html / latex : --standalone (sinon pandoc émet un FRAGMENT)
     - epub : --metadata title=... fallback si YAML n'a pas de `title:`
 
-    Les templates de référence sont configurés via les env vars / valves :
-      ALYX_WRITER_REFERENCE_DOCX (chemin .docx)
-      ALYX_WRITER_REFERENCE_PPTX (chemin .pptx)
-    Le chemin doit être accessible depuis le conteneur pipelines (volume monté).
+    Les templates de référence sont configurés via les env vars / valves
+    (ALYX_WRITER_REFERENCE_DOCX / _PPTX, chemin accessible dans le conteneur
+    pipelines). Ils sont ACCESSOIRES : `use_reference=False` les omet (utilisé
+    en retombée par _convert_via_pypandoc si le template fait échouer pandoc), et
+    `_valid_reference` écarte tout chemin invalide. Dans les deux cas on tombe
+    sur le style pandoc par défaut plutôt que de ne rien produire.
     """
     args: list[str] = []
     if fmt == "pptx":
         args.append("--slide-level=1")
         ref = os.environ.get("ALYX_WRITER_REFERENCE_PPTX", "")
-        if ref and Path(ref).exists():
+        if use_reference and _valid_reference(ref, "pptx"):
             args += ["--reference-doc", ref]
     elif fmt == "docx":
         ref = os.environ.get("ALYX_WRITER_REFERENCE_DOCX", "")
-        if ref and Path(ref).exists():
+        if use_reference and _valid_reference(ref, "docx"):
             args += ["--reference-doc", ref]
     elif fmt in ("html", "latex"):
         args.append("--standalone")
@@ -450,19 +475,30 @@ async def _convert_via_pypandoc(markdown: str, fmt: str) -> dict | None:
     output_path = _EXPORTS_DIR / filename
 
     # Arguments pandoc spécifiques au format (slide-level, standalone, metadata…).
-    extra_args = _pandoc_extra_args(markdown, fmt)
+    extra_args = _pandoc_extra_args(markdown, fmt, use_reference=True)
 
-    def _convert_blocking() -> None:
+    def _convert_blocking(args: list[str]) -> None:
         import pypandoc  # lazy : ~150 Mo bundle, ne charge qu'à la demande
         pypandoc.convert_text(
             markdown,
             fmt,
             format="markdown",
             outputfile=str(output_path),
-            extra_args=extra_args,
+            extra_args=args,
         )
 
-    await asyncio.to_thread(_convert_blocking)
+    # Le template --reference-doc (branding) est ACCESSOIRE : s'il fait échouer
+    # pandoc (format incompatible, version, fichier inattendu…), on réessaie SANS
+    # lui pour garantir la production du document (style pandoc par défaut). Si les
+    # args sont identiques (aucun reference-doc en jeu), l'échec vient d'ailleurs →
+    # on propage pour qu'il soit rapporté à l'utilisateur·rice.
+    try:
+        await asyncio.to_thread(_convert_blocking, extra_args)
+    except Exception:
+        fallback_args = _pandoc_extra_args(markdown, fmt, use_reference=False)
+        if fallback_args == extra_args:
+            raise
+        await asyncio.to_thread(_convert_blocking, fallback_args)
 
     if not output_path.exists() or output_path.stat().st_size == 0:
         return None
