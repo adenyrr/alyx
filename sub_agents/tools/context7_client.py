@@ -1,74 +1,83 @@
 """
-Client Context7 — MCP cloud public (https://mcp.context7.com/mcp).
-Expose les docs officielles de bibliothèques en temps réel.
+Client Context7 — passe par MCPO.
 
-Deux outils :
-  - resolve_library_id(library_name) → library_id
-  - get_library_docs(library_id, topic, tokens) → str (documentation Markdown)
+Context7 fournit les docs officielles de bibliothèques en temps réel. Le serveur
+MCP `@upstash/context7-mcp` est lancé par MCPO en stdio (cf. mcpo_config.json →
+context7, `npx … --api-key ${CONTEXT7_API_KEY}`). On l'atteint donc via MCPO sur
+`http://mcpo:8000/context7/*`, comme tous les autres outils.
+
+Historique : ce client faisait auparavant un POST HTTP JSON-RPC DIRECT vers
+https://mcp.context7.com/mcp. Ça renvoyait systématiquement 400 Bad Request car
+le transport streamable-HTTP MCP impose un handshake `initialize` (→ Mcp-Session-Id)
+AVANT tout `tools/call` — handshake que ce client ne faisait pas. MCPO, lui, gère
+le protocole MCP complet. On délègue donc tout à MCPO (cf. mémoire
+mcpo-session-and-headers-limits).
+
+Deux outils MCP exposés par context7 :
+  resolve-library-id(libraryName)                         → texte listant les
+                                                            bibliothèques candidates
+  get-library-docs(context7CompatibleLibraryID, topic, tokens) → doc Markdown
 """
 
 from __future__ import annotations
 
-import os
+import re
 from typing import Any
 
-import httpx
+from tools.mcpo_client import call_tool
 
-_CONTEXT7_URL = "https://mcp.context7.com/mcp"
-_CONTEXT7_API_KEY = os.environ.get("CONTEXT7_API_KEY", "")
-_TIMEOUT = 8.0  # échoue vite si le service cloud est lent ou indisponible
-
-# Client persistent — évite la négociation TLS à chaque appel
-_client: httpx.AsyncClient | None = None
+# ID Context7 de la forme `/org/projet` ou `/org/projet/version` dans le texte
+# renvoyé par resolve-library-id (qui liste plusieurs candidates).
+_LIB_ID_RE = re.compile(r"/[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+")
 
 
-def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=_TIMEOUT)
-    return _client
-
-
-def _headers() -> dict[str, str]:
-    h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    if _CONTEXT7_API_KEY:
-        h["Authorization"] = f"Bearer {_CONTEXT7_API_KEY}"
-    return h
-
-
-async def _mcp_call(method: str, params: dict[str, Any]) -> Any:
-    """Appelle un outil MCP via HTTP POST JSON-RPC."""
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": method, "arguments": params},
-    }
-    client = _get_client()
-    resp = await client.post(_CONTEXT7_URL, headers=_headers(), json=payload)
-    resp.raise_for_status()
-    data = resp.json()
-    if "error" in data:
-        raise RuntimeError(f"Context7 error: {data['error']}")
-    # Le contenu est dans result.content[0].text
-    content = data.get("result", {}).get("content", [])
-    if content and isinstance(content, list):
-        return content[0].get("text", "")
-    return str(data.get("result", ""))
+def _flatten(payload: Any) -> str:
+    """Aplati la réponse MCPO (str, liste, ou dict format MCP) en texte brut."""
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, list):
+        return "\n".join(_flatten(item) for item in payload if item)
+    if isinstance(payload, dict):
+        content = payload.get("content")
+        if isinstance(content, list):
+            parts = [
+                c.get("text", "") for c in content
+                if isinstance(c, dict) and isinstance(c.get("text"), str)
+            ]
+            if any(parts):
+                return "\n".join(p for p in parts if p)
+        for key in ("text", "result", "data"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return str(payload)
 
 
 async def resolve_library_id(library_name: str) -> str:
     """
-    Résout le nom d'une bibliothèque en son identifiant Context7.
+    Résout un nom de bibliothèque en identifiant Context7 (`/org/projet`).
+
+    resolve-library-id renvoie un TEXTE listant plusieurs candidates avec leur
+    ID ; on extrait le premier ID `/org/projet` rencontré. Si aucun ID n'est
+    trouvé (ou erreur), retourne "" pour que l'appelant abandonne proprement.
 
     Args:
         library_name: ex. 'leaflet', 'react', 'pandas'
 
     Returns:
-        library_id utilisable dans get_library_docs (ex. '/leafletjs/leaflet')
+        library_id utilisable par get_library_docs, ou "" si introuvable.
     """
-    result = await _mcp_call("resolve-library-id", {"libraryName": library_name})
-    return str(result)
+    try:
+        result = await call_tool("context7", "resolve-library-id", {"libraryName": library_name})
+    except Exception:
+        return ""
+    text = _flatten(result)
+    if not text or "error" in text.lower()[:200]:
+        return ""
+    match = _LIB_ID_RE.search(text)
+    return match.group(0) if match else ""
 
 
 async def get_library_docs(library_id: str, topic: str = "", tokens: int = 5000) -> str:
@@ -76,15 +85,20 @@ async def get_library_docs(library_id: str, topic: str = "", tokens: int = 5000)
     Récupère la documentation d'une bibliothèque sur un sujet précis.
 
     Args:
-        library_id: identifiant résolu par resolve_library_id
-        topic:      sujet ou feature spécifique (ex. 'markers', 'authentication')
+        library_id: identifiant `/org/projet` résolu par resolve_library_id
+        topic:      sujet/feature spécifique (ex. 'markers', 'authentication')
         tokens:     nombre de tokens max à retourner (défaut 5000)
 
     Returns:
-        Documentation Markdown de la bibliothèque.
+        Documentation Markdown, ou "" en cas d'échec.
     """
-    params: dict[str, Any] = {"libraryId": library_id, "tokens": tokens}
+    if not library_id:
+        return ""
+    args: dict[str, Any] = {"context7CompatibleLibraryID": library_id, "tokens": tokens}
     if topic:
-        params["topic"] = topic
-    result = await _mcp_call("get-library-docs", params)
-    return str(result)
+        args["topic"] = topic
+    try:
+        result = await call_tool("context7", "get-library-docs", args)
+    except Exception:
+        return ""
+    return _flatten(result)
