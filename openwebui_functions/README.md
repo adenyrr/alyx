@@ -22,5 +22,18 @@ du mode natif, indisponible pour un pipeline externe.
   consigne libre, puis resoumet automatiquement la consigne à Alyx.
 
   > Le pont de resoumission repose sur `window.parent.postMessage({type:'input:prompt:submit', …})`,
-  > le même mécanisme que celui documenté pour les embeds rich-UI. À vérifier selon
-  > la version d'Open WebUI ; en cas d'évolution du frontend, adapter le payload `execute`.
+  > le même mécanisme que celui documenté pour les embeds rich-UI.
+  >
+  > **Confirmé fonctionnel sur `open-webui:main`** (handler `onMessageHandler` dans
+  > `Chat.svelte`) : les types `input:prompt`, `input:prompt:submit` et `action:submit`
+  > sont acceptés en cross-origin. Comme l'iframe d'artifact est sandboxée sans
+  > `allow-same-origin` (origine opaque), un `input:prompt:submit` déclenche un
+  > **dialogue de confirmation** (« Confirm Prompt from Embed ») avant soumission —
+  > l'utilisateur·rice valide d'un clic. Aucun réglage à activer.
+  >
+  > Le toggle *Settings → Interface → « Allow Iframe Sandbox Same-Origin Access »*
+  > rendrait la soumission immédiate (sans dialogue) mais est **déconseillé** :
+  > `allow-scripts`+`allow-same-origin` sur un srcdoc permet à l'artifact de retirer
+  > le sandbox du parent (stored XSS, advisory GHSA-vjm7-m4xh-7wrc). Garder la
+  > confirmation HITL. Voir aussi la CSP `IFRAME_CSP` (compose.yaml) qui restreint
+  > ce que les artifacts peuvent charger/contacter.

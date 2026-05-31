@@ -1168,13 +1168,25 @@ class Pipeline:
                 stream_options={"include_usage": True},
                 extra_body=extra_body,
             )
+            # Anti-doublon : si la bibliographie auto-construite sera ajoutée plus
+            # bas, on coupe EN STREAMING tout bloc « Sources » que le LLM
+            # produirait malgré l'interdiction du prompt (sinon deux blocs Sources
+            # s'affichent). Cf. tools.quality.SourcesGate.
+            from tools.quality import SourcesGate
+            src_gate = SourcesGate() if self.valves.emit_bibliography_block else None
             async for token in self._astream_response(
                 stream,
                 show_model_reasoning=model_reasoning_enabled,
                 usage_out=synth_usage_out,
                 reasoning_handler=_emit_model_reasoning if model_reasoning_enabled else None,
             ):
-                q.put(token)
+                out_tok = src_gate.feed(token) if src_gate is not None else token
+                if out_tok:
+                    q.put(out_tok)
+            if src_gate is not None:
+                tail = src_gate.flush()
+                if tail:
+                    q.put(tail)
             await _emit_model_reasoning(final=True)
 
             # Liens de téléchargement des documents (agent writer) — émis

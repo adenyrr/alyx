@@ -55,6 +55,28 @@ services:
       # MCPO
       ENABLE_MCP_SERVERS: "true"
       MCP_SERVER_BASE_URL: "http://mcpo:8000"
+      # CSP des artifacts — injectée en <meta http-equiv> dans tout srcdoc iframe
+      # (Artifacts, previews HTML/code, modales de citation). Sans elle (défaut
+      # vide) un artifact généré par le LLM peut fetch n'importe où. La whitelist
+      # ci-dessous = exactement les hôtes référencés par skills/* (CDN JS/CSS +
+      # tuiles carto). `connect-src` énuméré = barrière anti-exfiltration (l'artifact
+      # ne peut plus poster les données de session vers un hôte arbitraire). Garder
+      # script/style/font alignés avec design-system.md (jsdelivr sert Tabler Icons).
+      # ⚠️ PersistentConfig : l'env var ne fait que SEEDER la valeur au 1er boot ;
+      # ensuite elle vit en base. Pour la changer après coup : Admin Settings ou
+      # repartir d'une base vierge. Si un artifact casse → ouvrir la console de
+      # l'iframe, repérer la directive violée, élargir img-src/connect-src.
+      IFRAME_CSP: >-
+        default-src 'none';
+        script-src 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com https://esm.sh https://cdnjs.cloudflare.com https://tonejs.github.io https://pixijs.com;
+        style-src 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com https://fonts.googleapis.com;
+        font-src https://fonts.gstatic.com https://cdn.jsdelivr.net data:;
+        img-src 'self' data: blob: https:;
+        media-src 'self' data: blob: https:;
+        connect-src https://cdn.jsdelivr.net https://unpkg.com https://esm.sh https://cdnjs.cloudflare.com https://tiles.openfreemap.org https://api.protomaps.com https://api.maptiler.com https://*.basemaps.cartocdn.com https://tile.openstreetmap.org https://*.tile.opentopomap.org;
+        worker-src 'self' blob:;
+        frame-src 'none';
+        base-uri 'none'
       # LiteLLM + Pipelines (Alyx) — multi-source
       OPENAI_API_BASE_URLS: "http://pipelines:9099"
       OPENAI_API_KEYS: "${PIPELINES_API_KEY}"

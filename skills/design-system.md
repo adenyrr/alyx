@@ -121,13 +121,30 @@ body {
 
 ---
 
-## 3. Charger les polices (CDN, à mettre dans `<head>`)
+## 3. Charger les polices + les icônes (CDN, à mettre dans `<head>`)
 
 ```html
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Tabler Icons (webfont) — 5800+ icônes vectorielles, même CDN que le reste -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/dist/tabler-icons.min.css">
 ```
+
+**Icônes — usage.** Une icône = `<i class="ti ti-NOM"></i>`. La couleur suit
+`currentColor` (donc `color: var(--accent)` sur le parent colore l'icône), la
+taille suit `font-size`. Exemples de noms : `ti-search`, `ti-download`,
+`ti-chart-bar`, `ti-bolt`, `ti-check`, `ti-x`, `ti-arrow-right`, `ti-settings`,
+`ti-external-link`, `ti-copy`, `ti-sun`, `ti-moon`. Catalogue : https://tabler.io/icons.
+
+```html
+<button class="btn btn--primary"><i class="ti ti-download"></i> Exporter</button>
+<span class="badge badge--success"><i class="ti ti-check"></i> Validé</span>
+```
+
+> Toujours préférer une icône Tabler à un emoji dans les artifacts « produit »
+> (boutons, badges, en-têtes) — rendu net, cohérent, et colorable via les tokens.
+> Les emojis restent acceptables pour le ton conversationnel hors artifact.
 
 ---
 
@@ -353,7 +370,7 @@ body {
 ## 11. Règles d'application
 
 1. **Toujours partir du shell `<main class="card">`** sauf si l'artifact a sa propre structure (deck reveal.js, mindmap markmap, etc.) — dans ce cas, garder au moins les tokens (var(--bg), var(--accent), etc.) et l'ambient gradient sur `body`.
-2. **Charger Inter + JetBrains Mono via Google Fonts** dans le `<head>` — c'est ce qui transforme immédiatement l'aspect « page brute » en « produit soigné ».
+2. **Charger Inter + JetBrains Mono via Google Fonts + Tabler Icons** dans le `<head>` — c'est ce qui transforme immédiatement l'aspect « page brute » en « produit soigné ». Utiliser `<i class="ti ti-…">` pour toute icône plutôt qu'un emoji.
 3. **Animer les entrées** : `card` fait son `card-in` automatiquement ; pour le contenu, ajouter `class="fade"` ou un délai `animation-delay`.
 4. **Limiter les couleurs vives** : utiliser `--accent` pour 1-2 éléments hero, pas partout. Le reste = neutres + opacités sur l'accent (`--accent-soft`).
 5. **Garder l'accessibilité** : `:focus-visible` toujours stylé, contrastes texte/bg vérifiés, `aria-label` sur les icônes seules.
@@ -426,6 +443,7 @@ body {
 - ❌ Background plat sans le gradient ambient (rend l'artifact « page brute »)
 - ❌ Couleurs custom hors palette (rouge HTML par défaut, bleu navigateur)
 - ❌ Police système par défaut au lieu d'Inter (différence énorme sur le rendu)
+- ❌ Emojis comme icônes d'UI (boutons/badges/titres) au lieu de Tabler `<i class="ti ti-…">`
 - ❌ Pas d'animation d'entrée (l'artifact « apparaît » plat sans transition)
 - ❌ Borders épais (≥ 2px) — on reste à 1px, l'élévation vient des ombres
 - ❌ Border-radius mixés (4px + 8px + 12px sans logique) — tenir à l'échelle r-sm/md/lg/xl

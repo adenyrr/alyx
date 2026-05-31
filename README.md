@@ -427,6 +427,37 @@ exploite plusieurs canaux Open WebUI supplémentaires :
   régénérer en artifact ou en présentation) et resoumet la consigne à Alyx.
   Installation manuelle via Admin → Functions.
 
+## Système d'artifacts interactifs
+
+Les agents visuels (`dev`, `presenter`, `mindmap`, `diagram`) produisent des
+**artifacts HTML/CSS/JS autonomes**, rendus par Open WebUI dans une iframe
+sandboxée — inline dans la bulle de message (valve `embed_html_inline`) et/ou
+dans le panneau Artifacts latéral.
+
+- **Le rendu.** Le code est exécuté côté client dans une iframe
+  `sandbox="allow-scripts allow-downloads"` (pas de serveur externe). HTML/CSS/JS
+  pur, libs tierces via CDN. C'est l'équivalent local des artifacts claude.ai.
+- **Le langage visuel.** Tous les artifacts partagent le design-system
+  ([skills/design-system.md](skills/design-system.md)), chargé systématiquement
+  avant les autres skills : tokens CSS (`--bg`, `--accent`, `--surface`…), thème
+  dark/light, police Inter + JetBrains Mono, icônes **Tabler** (`<i class="ti ti-…">`),
+  shell `.card`, boutons, badges, animations. C'est ce qui distingue un fragment
+  « page brute » d'un rendu « produit ».
+- **CDN whitelistés.** La CSP `IFRAME_CSP` (cf. [compose.yaml](compose.yaml),
+  service `open-webui`) restreint les artifacts aux seuls hôtes utilisés par les
+  skills (jsdelivr, unpkg, esm.sh, cdnjs, fonts Google, tuiles carto). Le
+  `connect-src` énuméré sert de **barrière anti-exfiltration** : un artifact ne
+  peut pas poster les données de session vers un hôte arbitraire.
+- **Le pont artifact → chat (`sendPrompt`).** Un bouton dans un artifact peut
+  resoumettre un prompt au chat via
+  `window.parent.postMessage({type:'input:prompt:submit', text}, '*')`. L'iframe
+  étant cross-origin, Open WebUI affiche un **dialogue de confirmation** avant
+  soumission (HITL). Mécanisme exploité par le plugin Action
+  ([openwebui_functions/](openwebui_functions/)) ; voir son README pour les
+  détails et la note de sécurité sur le toggle same-origin (déconseillé).
+- **Persistance.** Voir [§ Persistance des artifacts](#persistance-des-artifacts)
+  ci-dessous (rendu inline + fichier `.html` téléchargeable).
+
 ## Personnalisation par utilisateur·rice (UserValves)
 
 En complément des `Valves` globales, Alyx expose une classe `UserValves` permettant

@@ -507,6 +507,89 @@ _COMPLEMENT_MAP: dict[str, str] = {
 }
 
 
+# Titre Markdown d'une section bibliographique (Sources / Références / Bibliographie),
+# en début de ligne, emoji éventuel toléré entre les `#` et le mot-clé. Le titre
+# doit constituer TOUTE la ligne (`:?` final + fin de ligne) pour ne pas confondre
+# avec un titre de corps légitime du type « ## Sources de financement ».
+_LLM_SOURCES_CORE = (
+    r"(?:^|\n)[ \t]*#{1,6}[^\w\n]*"
+    r"(?:sources?|r[ée]f[ée]rences?|bibliograph(?:ie|y))[ \t]*:?[ \t]*"
+)
+# En cours de flux : un saut de ligne doit suivre pour CONFIRMER le titre (évite
+# de couper prématurément « ## Sources… » encore en train d'être streamé).
+_LLM_SOURCES_HEADING = re.compile(_LLM_SOURCES_CORE + r"(?=\n)", re.IGNORECASE)
+# En fin de flux : le LLM peut terminer juste après « ## Sources » sans newline.
+_LLM_SOURCES_HEADING_EOF = re.compile(_LLM_SOURCES_CORE + r"$", re.IGNORECASE)
+
+
+class SourcesGate:
+    """Filtre de flux qui supprime un bloc « Sources » généré par le LLM.
+
+    Le modèle de synthèse place parfois sa propre bibliographie en fin de réponse
+    malgré l'interdiction du prompt, ce qui faisait DOUBLON avec le bloc
+    `build_bibliography` auto-construit côté pipeline. Ce gate s'intercale dans la
+    boucle de streaming : `feed(token)` renvoie le texte sûr à émettre, et dès
+    qu'un titre de section Sources est détecté, tout ce qui suit (jusqu'à la fin
+    du flux) est coupé.
+
+    Conçu pour le streaming token-par-token :
+      - le corps en prose est transmis sans latence ;
+      - seule une ligne qui DÉBUTE par `#` est retenue le temps de savoir si
+        c'est un titre Sources (une ligne courte → délai négligeable) ;
+      - le titre peut être découpé sur plusieurs tokens (tampon interne).
+
+    Usage :
+        gate = SourcesGate()
+        async for token in stream:
+            out = gate.feed(token)
+            if out:
+                q.put(out)
+        tail = gate.flush()
+        if tail:
+            q.put(tail)
+    """
+
+    __slots__ = ("_buf", "_cut")
+
+    def __init__(self) -> None:
+        self._buf = ""     # texte reçu mais pas encore transmis
+        self._cut = False  # True une fois le titre Sources rencontré
+
+    def feed(self, token: str) -> str:
+        if self._cut:
+            return ""
+        self._buf += token
+        m = _LLM_SOURCES_HEADING.search(self._buf)
+        if m:
+            # Couper À PARTIR du `#` (et non de `m.start()`, qui pointe sur le
+            # `\n` précédent) : on préserve ainsi le corps à l'octet près, quelle
+            # que soit la fragmentation du flux. Sinon un token large mangerait
+            # le saut de ligne final du corps alors qu'un token fin l'aurait
+            # déjà émis → sortie dépendante du découpage.
+            cut_at = self._buf.index("#", m.start())
+            out, self._buf, self._cut = self._buf[:cut_at], "", True
+            return out
+        # Pas de titre confirmé : ne retenir que la dernière ligne partielle SI
+        # elle peut encore devenir un titre (commence par `#`). Sinon tout
+        # transmettre — le corps en prose n'est jamais retardé.
+        nl = self._buf.rfind("\n")
+        tail = self._buf[nl + 1:]
+        if tail.lstrip(" \t").startswith("#") or tail.strip() == "":
+            out, self._buf = self._buf[: nl + 1], tail
+        else:
+            out, self._buf = self._buf, ""
+        return out
+
+    def flush(self) -> str:
+        """Reliquat de fin de flux (vide si un titre Sources a été coupé)."""
+        if self._cut:
+            return ""
+        m = _LLM_SOURCES_HEADING_EOF.search(self._buf)
+        out = self._buf[: self._buf.index("#", m.start())] if m else self._buf
+        self._buf, self._cut = "", bool(m)
+        return out
+
+
 def build_bibliography(citations: list[dict], agent_confidence: dict | None = None) -> str:
     """Construit un bloc Markdown de bibliographie enrichie pour l'utilisateur·rice.
 
