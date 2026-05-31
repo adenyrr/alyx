@@ -1,10 +1,13 @@
 """
 Client Playwright — passe par MCPO.
 
-Le serveur MCP `playwright` (mcr.microsoft.com/playwright/mcp) est lancé par
-MCPO via [mcpo_config.json](../../mcpo_config.json). Aucun service `playwright`
-HTTP autonome n'existe dans compose.yaml : tout transite par MCPO sur
-`http://mcpo:8000/playwright/*`.
+Le serveur MCP `playwright` tourne dans un service Docker DÉDIÉ `playwright`
+(image mcr.microsoft.com/playwright/mcp : Chromium + libs système embarqués),
+distinct du conteneur mcpo qui n'a ni navigateur ni dépendances. MCPO s'y
+connecte par le réseau Docker (transport SSE, cf. mcpo_config.json → playwright)
+et l'expose à ce client sous `http://mcpo:8000/playwright/*`. Ce module ne voit
+que MCPO : le transport (SSE/streamable-http) et le service dédié sont
+transparents ici.
 
 Outils MCP utilisés :
   browser_navigate(url)  — charge l'URL

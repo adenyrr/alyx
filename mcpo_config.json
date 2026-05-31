@@ -111,9 +111,9 @@
     },
 
     "playwright": {
-      "_comment": "DOIT RESTER EN DERNIER. MCPO connecte les serveurs dans l'ordre du fichier et partage UN SEUL cancel scope pour tout le démarrage : si un serveur lève une exception dure (ici 403), TOUS les serveurs listés APRÈS lui sont annulés instantanément (cf. logs 31/05 08:18:47 — playwright 403 → duckduckgo/openmeteo/osm/context7/calculator annulés en 19 ms, même cancel scope). En le mettant en dernier, son échec n'entraîne plus aucun autre serveur. — Playwright MCP OFFICIEL Microsoft, service dédié `playwright` (image mcr.microsoft.com/playwright/mcp : Chromium + libs embarqués), connecté en streamable-HTTP. Tools attendus par playwright_client.py : browser_navigate / browser_snapshot. NB : le 403 sur http://playwright:8931/mcp est une validation d'en-tête Host (protection DNS-rebinding) côté serveur playwright — à corriger dans compose.yaml (cf. `node /app/cli.js --help` pour le flag d'autorisation d'hôtes), PAS ici.",
-      "type": "streamable-http",
-      "url": "http://playwright:8931/mcp"
+      "_comment": "DOIT RESTER EN DERNIER. MCPO connecte les serveurs dans l'ordre du fichier et partage UN SEUL cancel scope pour tout le démarrage : si un serveur lève une exception dure, TOUS les serveurs listés APRÈS lui sont annulés instantanément (cf. logs 31/05 08:18:47 — playwright 403 → duckduckgo/openmeteo/osm/context7/calculator annulés en 19 ms). En le mettant en dernier, son échec n'entraîne plus aucun autre serveur. — Playwright MCP OFFICIEL Microsoft, service dédié `playwright` (image mcr.microsoft.com/playwright/mcp : Chromium + libs embarqués). Tools attendus par playwright_client.py : browser_navigate / browser_snapshot.\n\nTRANSPORT = SSE (et non streamable-http). En streamable-http, la session MCP ouverte par MCPO au boot expire côté playwright (timeout idle/ping hardcodé, cf. microsoft/playwright-mcp#982,#1140), et MCPO ne se reconnecte PAS : son call_tool_with_reconnect n'intercepte que ClosedResourceError, alors qu'une session expirée remonte en McpError → 404 'Session terminated' définitif → tous les browser_navigate en 500 (cf. logs 31/05 14:15). SSE contourne le problème (open-webui/mcpo#209 « OK with SSE / KO with Streamable http »). playwright expose /sse en plus de /mcp. À RE-VALIDER sur l'hôte après `docker compose up -d` : si SSE expire aussi en idle, plan B = keepalive périodique ou pin d'une version mcpo corrigée.",
+      "type": "sse",
+      "url": "http://playwright:8931/sse"
     }
   }
 }
