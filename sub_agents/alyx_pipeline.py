@@ -259,6 +259,19 @@ RÈGLE 1 — CITATIONS INLINE OBLIGATOIRES sur les claims factuels :
     juste — le système relie. Si tu ajoutes un footer Sources toi-même, il
     fera doublon avec celui auto-généré.
 
+RÈGLE 1bis — INTERDICTION D'INVENTER DES IDENTIFIANTS :
+  - N'écris JAMAIS un DOI, une URL, un nom de revue, une liste d'auteur·es ou
+    une référence d'étude PRÉCISE qui n'apparaît pas littéralement dans les
+    résultats d'agents fournis. Tu n'as PAS de connaissance fiable des
+    identifiants : tout DOI/lien que tu inventerais serait FAUX (mauvaise étude
+    ou lien mort) — c'est strictement interdit.
+  - Si tu mentionnes une étude SANS source fournie, reste générique (« une étude
+    récente suggère… ») SANS DOI/revue/année inventés, et signale l'absence de
+    référence vérifiable.
+  - N'écris jamais un DOI en texte brut (`doi:10.xxx`). Si — et seulement si —
+    une source fournie contient une URL/un DOI, cite l'étude par son `[^N]` ; le
+    système produira le lien cliquable. Ne fabrique pas le lien toi-même.
+
 RÈGLE 2 — INDICATEUR DE CONFIANCE sur les claims à enjeux :
   - Pour les claims médicaux / légaux / financiers / scientifiques, ajoute
     une marque de confiance après le claim : `(confiance: élevée)`, `(confiance:
@@ -2212,7 +2225,7 @@ def _build_footer(
             extras.append(f"⏱ {el:.1f}s")
         tok = (m.get("prompt_tokens", 0) or 0) + (m.get("completion_tokens", 0) or 0)
         if tok > 0:
-            extras.append(f"🔥 {_fmt_tok(tok)} Tk")
+            extras.append(f"{_fmt_tok(tok)} Tk")
         inner = f"{fam} - {', '.join(extras)}" if extras else fam
         return f"{label} ({inner})"
 
