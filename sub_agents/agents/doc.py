@@ -41,10 +41,18 @@ _MODEL = "openrouter/deepseek"
 _LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000/v1")
 _LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 
+# Miroirs sci-hub — les domaines TOURNENT régulièrement (saisies, redirections).
+# `sci-hub.se` est mort (NXDOMAIN, vérifié 2026-05-31) et provoquait un
+# ConnectError('Name or service not known') sur CHAQUE DOI puisqu'il était en
+# tête de liste. Configurable via env pour pouvoir mettre à jour sans toucher au
+# code quand les domaines changent encore. Défaut : miroirs vivants au 2026-05-31.
 _SCIHUB_MIRRORS = [
-    "https://sci-hub.se",
-    "https://sci-hub.st",
-    "https://sci-hub.ru",
+    m.strip().rstrip("/")
+    for m in os.environ.get(
+        "ALYX_SCIHUB_MIRRORS",
+        "https://sci-hub.st,https://sci-hub.ru",
+    ).split(",")
+    if m.strip()
 ]
 
 _SYSTEM = """\
@@ -283,14 +291,22 @@ def _replace_doi_with_scihub(text: str) -> str:
 
 
 def _extract_dois(papers_data) -> list[str]:
-    """Extrait les DOIs depuis la réponse paper-search."""
+    """Extrait les DOIs depuis la réponse paper-search.
+
+    Le `\\` est EXCLU de la classe de caractères : sans ça, le backslash
+    d'échappement JSON qui suit parfois un DOI (`…011\\"` → `…011\\` ou `\\n`)
+    était avalé dans le DOI, qui devenait `…011\\` une fois `quote_plus`é en
+    `%5C` → URL sci-hub introuvable, ConnectError sur tous les articles
+    (constaté 2026-05-31). Le `rstrip` final retire toute ponctuation/backslash
+    résiduel en ceinture-bretelles. Les DOIs ne contiennent jamais de `\\`.
+    """
     dois: list[str] = []
-    doi_pattern = re.compile(r"10\.\d{4,9}/[^\s\"',]+")
+    doi_pattern = re.compile(r"10\.\d{4,9}/[^\s\"',\\]+")
 
     text = json.dumps(papers_data, ensure_ascii=False)
     for match in doi_pattern.finditer(text):
-        doi = match.group(0).rstrip(".,;)")
-        if doi not in dois:
+        doi = match.group(0).rstrip("\\.,;)")
+        if doi and doi not in dois:
             dois.append(doi)
         if len(dois) >= 5:
             break
