@@ -326,6 +326,14 @@ services:
       - "0.0.0.0"
       - "--port"
       - "8931"
+      # Sans ce flag, playwright-mcp valide l'en-tête Host (protection
+      # DNS-rebinding) et ne tolère QUE le host de bind → MCPO se connecte avec
+      # `Host: playwright:8931` et reçoit un 403 Forbidden (cf. logs 31/05
+      # 08:18:47). Le port n'étant PAS exposé hors du réseau Docker interne, on
+      # désactive la vérification (`*`). La doc @playwright/mcp précise que ce
+      # contrôle "n'est pas une frontière de sécurité". cf. microsoft/playwright-mcp#1373.
+      - "--allowed-hosts"
+      - "*"
     # Port interne uniquement — MCPO l'atteint via le réseau Docker.
     # ports:
     #   - "8931:8931"

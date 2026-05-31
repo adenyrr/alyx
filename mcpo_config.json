@@ -76,12 +76,6 @@
       "args": ["mcp-server-fetch", "--ignore-robots-txt"]
     },
 
-    "playwright": {
-      "_comment": "Playwright MCP OFFICIEL Microsoft, lancé comme service dédié `playwright` (image mcr.microsoft.com/playwright/mcp : Chromium + libs système embarqués). MCPO ne peut PAS lancer @playwright/mcp via npx dans son propre conteneur — l'image mcpo n'a ni navigateur ni dépendances, donc browser_navigate échouait en 500. On s'y connecte en streamable-HTTP. Tools attendus par playwright_client.py : browser_navigate / browser_snapshot. Le fork PyPI mcp-playwright (navigate_to_url, get_text_content) reste incompatible.",
-      "type": "streamable-http",
-      "url": "http://playwright:8931/mcp"
-    },
-
     "duckduckgo": {
       "_comment": "Recherche web via DuckDuckGo (anonyme).",
       "command": "uvx",
@@ -114,6 +108,12 @@
       "_comment": "Évaluation d'expressions mathématiques (bibliothèque math Python complète). Tool: evaluate(expression).",
       "command": "uvx",
       "args": ["mcp-server-calculator"]
+    },
+
+    "playwright": {
+      "_comment": "DOIT RESTER EN DERNIER. MCPO connecte les serveurs dans l'ordre du fichier et partage UN SEUL cancel scope pour tout le démarrage : si un serveur lève une exception dure (ici 403), TOUS les serveurs listés APRÈS lui sont annulés instantanément (cf. logs 31/05 08:18:47 — playwright 403 → duckduckgo/openmeteo/osm/context7/calculator annulés en 19 ms, même cancel scope). En le mettant en dernier, son échec n'entraîne plus aucun autre serveur. — Playwright MCP OFFICIEL Microsoft, service dédié `playwright` (image mcr.microsoft.com/playwright/mcp : Chromium + libs embarqués), connecté en streamable-HTTP. Tools attendus par playwright_client.py : browser_navigate / browser_snapshot. NB : le 403 sur http://playwright:8931/mcp est une validation d'en-tête Host (protection DNS-rebinding) côté serveur playwright — à corriger dans compose.yaml (cf. `node /app/cli.js --help` pour le flag d'autorisation d'hôtes), PAS ici.",
+      "type": "streamable-http",
+      "url": "http://playwright:8931/mcp"
     }
   }
 }
