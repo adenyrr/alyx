@@ -140,18 +140,6 @@ def _routing_condition(state: AlyxState) -> list[str]:
     routing = state.get("routing", [])
     return routing if routing else [END]
 
-
-def _merge_agent_output(state: AlyxState, agent_name: str, output: dict) -> AlyxState:
-    """Fusionne la sortie d'un agent dans l'état partagé."""
-    current_outputs = dict(state.get("agent_outputs", {}))
-    current_outputs.update(output.get("agent_outputs", {}))
-
-    current_artifacts = list(state.get("artifacts", []))
-    current_artifacts.extend(output.get("artifacts", []))
-
-    return {**state, "agent_outputs": current_outputs, "artifacts": current_artifacts}
-
-
 async def build_graph(db_url: str, models: dict | None = None):
     """
     Construit et compile le graphe LangGraph avec persistance PostgreSQL.
