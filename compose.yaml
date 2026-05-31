@@ -279,8 +279,10 @@ services:
     ports:
       - "3722:8000"
     command: ["mcpo", "--config", "/config/mcpo_config.json"]
+    init: true
     volumes:
       - ./mcpo_config.json:/config/mcpo_config.json:ro,Z
+      - mcp_cache:/cache
       - mcp_memory:/data/memory
       - mcp_duckdb:/data/duckdb
       - mcp_uploads:/data/uploads
@@ -289,6 +291,8 @@ services:
     environment:
       CONTEXT7_API_KEY: "${CONTEXT7_API_KEY:-}"
       OPEN_TERMINAL_API_KEY: "${OPEN_TERMINAL_API_KEY:-}"
+      UV_CACHE_DIR: "/cache/uv"
+      npm_config_cache: "/cache/npm"
     depends_on:
       playwright:
         condition: service_started
@@ -371,6 +375,8 @@ volumes:
   qdrant_storage:
     driver: local
   redis_data:
+    driver: local
+  mcp_cache:
     driver: local
   mcp_memory:
     driver: local
