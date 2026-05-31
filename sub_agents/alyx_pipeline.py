@@ -83,14 +83,42 @@ _AGENT_ICONS = {
     "audio":        "🎙️ Audio",
 }
 
-# Noms courts des modèles pour la signature
-_MODEL_SHORT_NAMES: dict[str, str] = {
-    "openrouter/qwen3.5-flash": "Qwen-flash",
-    "openrouter/deepseek":      "DeepSeek",
-    "openrouter/kimi-k2.5":     "Kimi",
-    "openrouter/gpt-oss":       "GPT-oss",
-    "pollinations.ai":          "Pollinations",
-}
+# Familles de modèles pour la signature — on n'affiche que le nom général
+# (mistral, deepseek, qwen, kimi…) quelle que soit la version. Premier mot-clé
+# trouvé dans l'id du modèle gagne ; ordre = priorité de désambiguïsation.
+_MODEL_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("mistral",      ("mistral", "ministral", "devstral", "codestral", "pixtral", "magistral")),
+    ("deepseek",     ("deepseek",)),
+    ("qwen",         ("qwen", "qwq")),
+    ("kimi",         ("kimi", "moonshot")),
+    ("gpt",          ("gpt", "openai", "o1", "o3", "o4")),
+    ("claude",       ("claude", "anthropic", "sonnet", "opus", "haiku")),
+    ("gemini",       ("gemini", "gemma")),
+    ("llama",        ("llama",)),
+    ("grok",         ("grok",)),
+    ("pollinations", ("pollinations",)),
+)
+
+
+def _model_family(model_id: str) -> str:
+    """Nom de famille générique d'un modèle, insensible à la version.
+
+    mistral-large / ministral / devstral → "mistral", deepseek-v4-pro →
+    "deepseek", qwen-3-5 → "qwen", kimi-4.6 → "kimi". Repli : premier segment
+    du dernier composant du chemin, débarrassé des suffixes de version.
+    """
+    s = (model_id or "").lower()
+    for family, keys in _MODEL_FAMILIES:
+        if any(k in s for k in keys):
+            return family
+    tail = s.split("/")[-1]
+    return re.split(r"[-_:.\d]", tail)[0] or tail or "?"
+
+
+def _fmt_tok(n: int) -> str:
+    """Formate un nombre de tokens : 1234 → '1.2k', 850 → '850'."""
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
 
 # Noms courts des agents pour la signature
 _AGENT_SHORT_NAMES: dict[str, str] = {
@@ -116,14 +144,6 @@ _AGENT_SHORT_NAMES: dict[str, str] = {
     "code_exec":    "Exécution code",
     "fact_checker": "Fact-checker",
     "audio":        "Audio",
-}
-
-# Prix modèles en $/1M tokens {input, output}
-_MODEL_PRICING: dict[str, dict[str, float]] = {
-    "openrouter/qwen3.5-flash": {"input": 0.15,  "output": 0.60},
-    "openrouter/deepseek":      {"input": 0.27,  "output": 1.10},
-    "openrouter/kimi-k2.5":     {"input": 1.00,  "output": 3.00},
-    "openrouter/gpt-oss":       {"input": 0.15,  "output": 0.60},
 }
 
 _LOGGER = logging.getLogger(__name__)
@@ -1044,13 +1064,19 @@ class Pipeline:
                 return
 
             # Synthèse finale
+            # Citations calculées UNE SEULE FOIS sur les sorties BRUTES, AVANT le
+            # strip HTML et la compression de contexte (qui élaguent/mutent les
+            # URLs). La pastille native ET le bloc 📚 Sources réutilisent cette
+            # même liste → compte identique, URLs propres et cliquables.
+            citations = _extract_citations(agent_outputs)
+
             # Émettre les citations source (OpenWebUI cartes persistantes)
             # avec, si valve activée, un badge d'autorité du domaine (🟢🟡🟠🔴).
             # FILTRE : on exclut les CDN/assets (jsdelivr, unpkg, fonts.google…)
             # qui ne sont pas de vraies sources documentaires.
             if event_emitter:
                 from tools.quality import score_url_authority, authority_emoji, is_cdn_or_asset, source_confidence
-                for citation in _extract_citations(agent_outputs):
+                for citation in citations:
                     if is_cdn_or_asset(citation["url"]):
                         continue  # CDN d'une lib JS/CSS → pas une source
                     title = citation["title"]
@@ -1226,7 +1252,7 @@ class Pipeline:
             # la synthèse Alyx ajoute inline (via prompt update) pointent ici.
             if self.valves.emit_bibliography_block:
                 from tools.quality import build_bibliography
-                bib = build_bibliography(_extract_citations(agent_outputs), agent_confidence)
+                bib = build_bibliography(citations, agent_confidence)
                 if bib:
                     q.put(bib)
 
@@ -1979,47 +2005,69 @@ def _build_synthesis_context(agent_outputs: dict[str, str], artifacts: list[dict
     return "\n\n".join(parts)
 
 
+_CITATION_MD_RE = re.compile(r"\[([^\]]{1,120})\]\((https?://[^\)\s]+)\)")
+_CITATION_BARE_RE = re.compile(r"(?<!\()(?<!\])(https?://[^\s\]\)\"'<>]{10,})")
+
+
+def _clean_url(url: str) -> str:
+    """Retire la ponctuation parasite de fin (et la `)` non appariée des URLs
+    type Wikipedia) pour produire un lien réellement cliquable."""
+    url = url.strip().rstrip(".,;:!?\"'»>")
+    if url.count(")") > url.count("("):
+        url = url[:url.rfind(")")]
+    return url
+
+
+def _valid_url(url: str) -> bool:
+    """Vrai si `url` est un lien http(s) plausible : hôte avec un point et un
+    TLD d'au moins 2 lettres. Écarte les URLs tronquées/corrompues qui « ne
+    renvoient à aucun lien »."""
+    m = re.match(r"https?://([^/\s:]+)", url)
+    return bool(m and "." in m.group(1) and re.search(r"\.[a-z]{2,}$", m.group(1), re.I))
+
+
 def _extract_citations(agent_outputs: dict[str, str]) -> list[dict]:
     """
-    Extrait les URLs depuis les sorties des agents web, doc et wikipedia.
-    Retourne une liste de {url, title, snippet, agent}, dédupliquée, max 10.
+    Extrait les sources citables depuis les sorties des agents web/doc/wikipedia/…
 
-    `agent` = nom de l'agent qui a produit la source (web/wikipedia/doc/…).
-    Permet de pondérer l'indice de confiance de chaque source par la confiance
-    auto-déclarée de l'agent collecteur (cf. quality.build_bibliography).
+    Retourne une liste de {url, title, snippet, agent}, dédupliquée et VALIDÉE
+    (URLs propres et résolubles), max 10. À appeler UNE SEULE FOIS sur les sorties
+    brutes — avant compression/strip — pour que la pastille native et le bloc
+    📚 Sources affichent le même ensemble.
+
+    `agent` = agent collecteur (web/wikipedia/doc/…), sert à pondérer l'indice de
+    confiance de chaque source (cf. quality.build_bibliography).
     """
-    _url_pattern = re.compile(r"\[([^\]]{1,120})\]\((https?://[^\)]+)\)")
-    _bare_url_pattern = re.compile(r"(?<!\()(https?://[^\s\]\)\"',]{10,})")
     seen: set[str] = set()
     results: list[dict] = []
 
-    # Agents qui produisent des sources utiles
+    def _add(url: str, title: str, snippet: str, agent: str) -> bool:
+        url = _clean_url(url)
+        if not _valid_url(url) or url in seen:
+            return False
+        seen.add(url)
+        results.append({
+            "url": url,
+            "title": (title or url)[:100],
+            "snippet": (snippet or title or url)[:300],
+            "agent": agent,
+        })
+        return len(results) >= 10
+
     for name in ("web", "wikipedia", "doc", "rag", "geo", "media"):
         text = agent_outputs.get(name, "") or ""
         if not text:
             continue
-
-        # Liens markdown [titre](url)
-        for title, url in _url_pattern.findall(text):
-            url = url.rstrip(")")
-            if url not in seen:
-                seen.add(url)
-                # snippet = phrase autour du lien (heuristique)
-                idx = text.find(url)
-                start = max(0, idx - 80)
-                snippet = text[start:idx + len(url) + 80].strip()
-                results.append({"url": url, "title": title[:100], "snippet": snippet[:300], "agent": name})
-                if len(results) >= 10:
-                    return results
-
-        # URLs brutes (fallback)
-        for url in _bare_url_pattern.findall(text):
-            url = url.rstrip(".,;:)")
-            if url not in seen:
-                seen.add(url)
-                results.append({"url": url, "title": url[:100], "snippet": "", "agent": name})
-                if len(results) >= 10:
-                    return results
+        # 1) Liens markdown [titre](url) — titre lisible privilégié.
+        for title, url in _CITATION_MD_RE.findall(text):
+            idx = text.find(url)
+            snippet = text[max(0, idx - 80):idx + len(url) + 80].strip() if idx >= 0 else ""
+            if _add(url, title.strip(), snippet, name):
+                return results
+        # 2) URLs nues (fallback) — titre = URL.
+        for url in _CITATION_BARE_RE.findall(text):
+            if _add(url, "", "", name):
+                return results
 
     return results
 
@@ -2127,19 +2175,6 @@ async def _emit_chat_tags(event_emitter, user_message: str) -> None:
         pass  # Non-bloquant — les tags ne sont pas critiques
 
 
-def _estimate_cost(agent_metrics: dict[str, dict]) -> float:
-    """Retourne le coût estimé en USD pour l'ensemble des appels LLM du tour."""
-    total = 0.0
-    for m in agent_metrics.values():
-        model = m.get("model", "")
-        pricing = _MODEL_PRICING.get(model, {})
-        if pricing:
-            inp = m.get("prompt_tokens", 0) or 0
-            out = m.get("completion_tokens", 0) or 0
-            total += (inp * pricing["input"] + out * pricing["output"]) / 1_000_000
-    return total
-
-
 def _build_footer(
     alyx_model: str,
     agent_outputs: dict,
@@ -2149,57 +2184,53 @@ def _build_footer(
     show_perf_stats: bool = False,
 ) -> str:
     """
-    Construit la signature Alyx.
-    Exemples :
-      "Alyx (Qwen-flash)"
-      "Alyx (Qwen-flash) avec Recherche (Qwen-flash) et Dev (Kimi)"
-      "Alyx (Qwen-flash) avec Recherche, Wikipédia et Dev  ·  ⏱ 4.2s  ·  ~1.2k tok  ·  ~$0.001"
+    Construit la signature Alyx (affichée en italique sous la réponse).
+
+    Le modèle est toujours réduit à sa FAMILLE (mistral, deepseek, qwen, kimi…).
+
+    show_perf_stats = False :
+      "Alyx (mistral) avec l'aide des agents Recherche (deepseek), Wikipédia (mistral)"
+    show_perf_stats = True :
+      "Réponse fournie en ⏱ 36.1s et ~12.3k Tk par Alyx (mistral) avec l'aide des
+       agents Wikipédia (mistral - ⏱ 3.1s, 🔥 1.2k Tk), Recherche (deepseek - ⏱ 36.1s, 🔥 1.2k Tk)"
     """
-    alyx_short = _MODEL_SHORT_NAMES.get(alyx_model, alyx_model.split("/")[-1])
-    base = f"Alyx ({alyx_short})"
+    metrics = agent_metrics or {}
+    alyx_fam = _model_family(alyx_model)
 
-    active_agents = [
-        name for name in agent_outputs
-        if agent_outputs.get(name, "").strip()
-    ]
+    # Agents actifs (ayant produit une sortie), hors synthèse Alyx elle-même.
+    active = [n for n in agent_outputs if (agent_outputs.get(n) or "").strip()]
 
-    if not active_agents:
-        footer = base
-    else:
-        agent_parts: list[str] = []
-        for name in active_agents:
-            label = _AGENT_SHORT_NAMES.get(name, name)
-            agent_model = (models or {}).get(name, "")
-            short_model = _MODEL_SHORT_NAMES.get(agent_model, "")
-            if short_model and short_model != alyx_short:  # n'afficher le modèle que s'il est différent d'Alyx
-                agent_parts.append(f"{label} ({short_model})")
-            else:
-                agent_parts.append(label)
+    def _agent_part(name: str) -> str:
+        label = _AGENT_SHORT_NAMES.get(name, name)
+        m = metrics.get(name, {})
+        fam = _model_family((models or {}).get(name, "") or m.get("model", ""))
+        if not show_perf_stats:
+            return f"{label} ({fam})"
+        extras: list[str] = []
+        el = m.get("elapsed")
+        if el is not None:
+            extras.append(f"⏱ {el:.1f}s")
+        tok = (m.get("prompt_tokens", 0) or 0) + (m.get("completion_tokens", 0) or 0)
+        if tok > 0:
+            extras.append(f"🔥 {_fmt_tok(tok)} Tk")
+        inner = f"{fam} - {', '.join(extras)}" if extras else fam
+        return f"{label} ({inner})"
 
-        if len(agent_parts) == 1:
-            footer = f"{base} avec {agent_parts[0]}"
-        elif len(agent_parts) == 2:
-            footer = f"{base} avec {agent_parts[0]} et {agent_parts[1]}"
-        else:
-            footer = f"{base} avec {', '.join(agent_parts[:-1])} et {agent_parts[-1]}"
+    agents_str = ""
+    if active:
+        agents_str = " avec l'aide des agents " + ", ".join(_agent_part(n) for n in active)
 
-    if show_perf_stats and agent_metrics:
-        total_in = sum(m.get("prompt_tokens", 0) or 0 for m in agent_metrics.values())
-        total_out = sum(m.get("completion_tokens", 0) or 0 for m in agent_metrics.values())
-        total_tok = total_in + total_out
-        cost = _estimate_cost(agent_metrics)
-
-        perf_parts: list[str] = []
+    if show_perf_stats and metrics:
+        total_tok = sum(
+            (m.get("prompt_tokens", 0) or 0) + (m.get("completion_tokens", 0) or 0)
+            for m in metrics.values()
+        )
+        head_bits: list[str] = []
         if elapsed is not None:
-            perf_parts.append(f"⏱ {elapsed:.1f}s")
+            head_bits.append(f"⏱ {elapsed:.1f}s")
         if total_tok > 0:
-            if total_tok >= 1000:
-                perf_parts.append(f"~{total_tok / 1000:.1f}k tok")
-            else:
-                perf_parts.append(f"~{total_tok} tok")
-        if cost > 0.0:
-            perf_parts.append(f"~${cost:.4f}")
-        if perf_parts:
-            footer += "  ·  " + "  ·  ".join(perf_parts)
+            head_bits.append(f"~{_fmt_tok(total_tok)} Tk")
+        prefix = f"Réponse fournie en {' et '.join(head_bits)} par " if head_bits else ""
+        return f"{prefix}Alyx ({alyx_fam}){agents_str}"
 
-    return footer
+    return f"Alyx ({alyx_fam}){agents_str}"
