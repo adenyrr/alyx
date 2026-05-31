@@ -406,12 +406,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     _prompt_tokens += _u.get("input_tokens", 0) or 0
     _completion_tokens += _u.get("output_tokens", 0) or 0
 
-    # Remplacer les liens doi.org par sci-hub.st dans la réponse finale
-    output = _replace_doi_with_scihub(response.content)
+    # Bibliographie déterministe : liens RÉELS (doi.org / URL) construits par le
+    # CODE depuis les métadonnées paper-search, jamais par le LLM. Annexée à la
+    # sortie → captée par le système de citations du pipeline (pastille + 📚 Sources).
+    output = (response.content or "") + _build_references_block(records)
 
-    # Confidence doc : base 0.85 (papiers peer-reviewed), boost si plusieurs
-    # DOI distincts trouvés (corroboration intra-littérature), penalty si vide.
-    n_dois = len(_extract_dois(papers_result)) if papers_result else 0
+    # Confidence doc : pondérée par le nombre de DOI réels (corroboration
+    # intra-littérature), pénalité si aucune source identifiée.
+    n_dois = sum(1 for r in records if r["doi"])
     if n_dois == 0:
         conf = 0.30
     elif n_dois >= 5:
