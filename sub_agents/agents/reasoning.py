@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
