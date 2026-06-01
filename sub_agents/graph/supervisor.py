@@ -236,6 +236,28 @@ RULE 10c — FILE FORMAT TRIGGERS WRITER (CRITICAL):
   agent (doc/data/web/wiki) when the user asks for a specific file format — the
   research output won't be wrapped in a downloadable document.
 
+RULE 11b — AUTO-VISUALISATION (proposer un artifact SANS demande explicite) :
+  Quand la réponse se prête NATURELLEMENT à un visuel interactif, ajoute `dev`
+  en phase 2 (routing_next) MÊME si l'utilisateur·rice ne l'a pas demandé. Ne
+  réclame jamais un second tour manuel. Déclenche sur ces SIGNAUX FORTS :
+    • LIEUX / GÉOGRAPHIE → carte Leaflet : « lieux à visiter », « que voir à X »,
+      « restaurants/musées/itinéraire à X », adresses, coordonnées, « sur une
+      carte ». La phase 1 (web/wikipedia/geo) fournit les lieux ; dev en fait
+      une carte interactive avec marqueurs.
+    • COMPARATIF → tableau/chart : « compare X et Y », « versus », « différences
+      entre », « X ou Y ? », classement, « top 5/10 », palmarès.
+    • SÉRIES CHIFFRÉES → graphe : évolution, statistiques, parts de marché,
+      données quantifiées multiples, « répartition de ».
+  Patterns :
+    "Lieux à visiter à Tournai" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+    "Que voir à Kyoto + restos renommés" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+    "Compare l'iPhone 16 et le Pixel 9" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+    "Top 10 des pays par PIB" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+  N'ajoute PAS dev pour : définitions simples, biographies, questions oui/non,
+  opinions, explications conceptuelles, ou quand la phase 1 est elle-même un
+  livrable visuel (presenter/mindmap/diagram). En cas de doute → ne PAS ajouter
+  dev (Alyx proposera l'artifact en fin de réponse, l'utilisateur·rice validera).
+
 RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   When task B genuinely CANNOT run without task A's output, use JSON object format:
     {"routing": ["<phase1_agents>"], "routing_next": ["<phase2_agents>"]}
@@ -294,6 +316,10 @@ RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "Analyse médicale approfondie des traitements anti-TNF" → ["reasoning", "doc"]
   "Donne-moi la population de Tokyo" → ["wikipedia"]
   "Population de Tokyo et croissance récente" → ["wikipedia", "web"]
+  "Lieux à visiter à Tournai, incontournables et restos renommés" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+  "Que voir à Kyoto en 3 jours ?" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+  "Compare l'iPhone 16 et le Pixel 9" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
+  "Top 10 des pays par PIB" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
   "Recherche les études sur le microbiome intestinal" → ["doc"]
   "Find the GDP of the top 10 countries and create an interactive bar chart" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
   "Recherche les coordonnées GPS de Paris, Lyon, Marseille et affiche les sur une carte Leaflet" → {"routing": ["geo"], "routing_next": ["dev"]}

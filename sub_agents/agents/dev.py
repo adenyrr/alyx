@@ -165,6 +165,33 @@ def _infer_quick_command(query: str) -> str:
     return ""
 
 
+# Indices d'une intention cartographique (requête OU données de phase 1).
+# Pas de \b final : on veut matcher les pluriels (« restaurants », « lieux »…).
+_MAP_INTENT_RE = re.compile(
+    r"\b(carte|map\b|leaflet|itin[ée]raire|lieu|visiter|visite|incontournable|"
+    r"restaurant|resto|mus[ée]e|monument|attraction|touris|adresse|quartier|"
+    r"r[ée]gion|coordonn[ée]e|latitude|longitude|\bgps\b|"
+    r"(?:que|où|a|à) (?:voir|aller|visiter|manger|faire))",
+    re.IGNORECASE,
+)
+# Coordonnées explicites dans les données (lat/lon décimaux côte à côte).
+_COORD_RE = re.compile(r"-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}")
+
+
+def _wants_map(user_text: str, prior_outputs: dict) -> bool:
+    """Vrai si une carte est l'artifact pertinent : l'agent geo a tourné, OU des
+    coordonnées sont présentes dans les données, OU l'intention cartographique
+    est lisible dans la requête + des lieux ont été collectés en phase 1."""
+    if prior_outputs.get("geo"):
+        return True
+    joined = " ".join(str(v) for v in prior_outputs.values())
+    if _COORD_RE.search(joined):
+        return True
+    if prior_outputs and _MAP_INTENT_RE.search(user_text):
+        return True
+    return False
+
+
 def _last_user_message(messages: list) -> str:
     for msg in reversed(messages):
         if msg.type == "human":
@@ -215,6 +242,19 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     # 1b. Skills locaux pertinents (charts, libs spécifiques…)
     await _emit("📚 Recherche dans les skills…")
     skill_hits = find_relevant_skills(user_text, agent="dev")
+    skill_names_loaded = {n for _, n, _ in skill_hits}
+
+    # 1c. Auto-carte : si la phase 1 a produit des données GÉOGRAPHIQUES (geo, ou
+    # des lieux/coordonnées dans web/wikipedia), on FORCE le skill leaflet-maps.
+    # Le matcher de skills score sur le texte utilisateur·rice (anglais) ; une
+    # requête FR « lieux à visiter » ne le ferait pas surfacer alors que la carte
+    # est précisément l'artifact attendu (cf. supervisor RULE 11b).
+    if "leaflet-maps" not in skill_names_loaded and _wants_map(user_text, prior_outputs):
+        leaflet = get_skill("leaflet-maps")
+        if leaflet:
+            skill_hits = [(99, "leaflet-maps", leaflet), *skill_hits]
+            skill_names_loaded.add("leaflet-maps")
+
     if skill_hits:
         skill_names = ", ".join(n for _, n, _ in skill_hits)
         await _emit(f"📚 Skills : {skill_names}")
