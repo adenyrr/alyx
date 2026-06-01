@@ -62,7 +62,11 @@ Given the user's last message, output ONLY a JSON array of agent names to invoke
   "reasoning" → COMPLEX analytical decomposition: multi-variable risk analysis, strategic planning,
                   pros/cons comparison, differential diagnosis, multi-step logical reasoning,
                   decision frameworks. NOT for factual questions, NOT for code, NOT for images.
-  "writer"    → LONG-FORM DOCUMENT AUTHORING in prose: business reports, technical RFCs,
+  "writer"    → also handles FAITHFUL PROOFREADING (correct spelling/grammar of a
+                  text WITHOUT rewriting it) — triggers: "corrige l'orthographe",
+                  "corrige la grammaire", "relis et corrige les fautes", "vérifie
+                  l'orthographe", "proofread". The writer has a dedicated strict
+                  fidelity mode for this. ALSO: LONG-FORM DOCUMENT AUTHORING in prose: business reports, technical RFCs,
                   academic papers, whitepapers, meeting minutes, blog posts, press releases,
                   cover letters, CVs, professional emails. Produces structured Markdown
                   (optionally converted to .docx/.tex/.epub via pandoc if explicitly requested).
@@ -334,6 +338,9 @@ RULE 11 — SEQUENTIAL WORKFLOWS (phase 1 → phase 2):
   "Écris un CV de développeur senior en Markdown" → ["writer"]
   "Prépare un compte-rendu de réunion structuré" → ["writer"]
   "Rédige un rapport business sur le marché des EV en .docx" → ["writer"]
+  "Corrige l'orthographe de ce texte : « ... »" → ["writer"]
+  "Relis et corrige les fautes de grammaire de mon paragraphe" → ["writer"]
+  "Vérifie l'orthographe et la ponctuation de ce passage" → ["writer"]
   "Synthétise une revue de littérature sur Alzheimer en rapport académique" → {"routing": ["doc"], "routing_next": ["writer"]}
   "SWOT du marché du SaaS B2B puis transforme-le en mémo stratégique" → {"routing": ["reasoning"], "routing_next": ["writer"]}
   "Récupère les chiffres de vente Tesla 2024 et fais un rapport investisseur" → {"routing": ["data"], "routing_next": ["writer"]}
