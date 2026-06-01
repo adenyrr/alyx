@@ -248,6 +248,10 @@ RULE 11b — AUTO-VISUALISATION (proposer un artifact SANS demande explicite) :
       entre », « X ou Y ? », classement, « top 5/10 », palmarès.
     • SÉRIES CHIFFRÉES → graphe : évolution, statistiques, parts de marché,
       données quantifiées multiples, « répartition de ».
+    • CHRONOLOGIE → frise (vis-timeline) : « chronologie de X », « frise »,
+      « les grandes dates de », histoire datée d'événements successifs.
+    • PLANNING / DATES À VENIR → calendrier : « planning », « agenda »,
+      « programme de la semaine », « emploi du temps ».
   Patterns :
     "Lieux à visiter à Tournai" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}
     "Que voir à Kyoto + restos renommés" → {"routing": ["web", "wikipedia"], "routing_next": ["dev"]}

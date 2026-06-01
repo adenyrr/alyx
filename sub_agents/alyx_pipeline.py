@@ -557,6 +557,7 @@ class Pipeline:
         writer_reference_pptx: str = Field(default="", description="Chemin vers un template PPTX de référence pour brander les sorties writer/presenter pptx")
         embed_html_inline: bool = Field(default=True, description="Rendre les artifacts HTML de l'agent dev en iframe inline (event `embeds` OpenWebUI) au lieu de blocs de code markdown (panneau Artifacts)")
         persist_html_artifacts: bool = Field(default=True, description="Produire AUSSI un fichier .html téléchargeable pour chaque artifact HTML (dev/presenter/mindmap/diagram) en plus de l'iframe inline")
+        suggest_artifacts: bool = Field(default=True, description="Sur SIGNAL FAIBLE (réponse qui se prêterait à un visuel mais sans artifact produit), proposer un ou des « follow-up chips » cliquables (carte, tableau, graphique, frise…) via l'event OpenWebUI `chat:message:follow_ups`. Nécessite une version OpenWebUI qui gère cet event.")
         emit_execution_graph: bool = Field(default=False, description="Émettre un diagramme mermaid post-turn récapitulant les agents exécutés (phases, durées). Utile pour le debug.")
 
         # --- Superviseur ---
@@ -1131,6 +1132,7 @@ class Pipeline:
             # au lieu de les laisser passer en bloc de code markdown (panneau Artifacts).
             # La sortie dev est nettoyée pour que la synthèse explique l'artifact sans
             # reproduire le code (évite le doublon inline + panneau).
+            all_embeds_emitted = False  # un artifact HTML a-t-il été rendu inline ?
             if self.valves.embed_html_inline:
                 all_embeds: list[str] = []
                 for _html_agent in ("dev", "presenter", "mindmap", "diagram"):
@@ -1159,6 +1161,7 @@ class Pipeline:
                                     })
                 if all_embeds:
                     await _emit_html_embeds(event_emitter, all_embeds)
+                    all_embeds_emitted = True
 
             # ── Context compression : si la somme des outputs dépasse le seuil,
             # on compresse via un LLM cheap pour réduire le coût de synthèse. ──
@@ -1239,6 +1242,7 @@ class Pipeline:
                     tok = src_gate.feed(tok)
                 return tok
 
+            synth_chunks: list[str] = []  # texte final accumulé (scan signaux faibles)
             async for token in self._astream_response(
                 stream,
                 show_model_reasoning=model_reasoning_enabled,
@@ -1248,6 +1252,7 @@ class Pipeline:
                 out_tok = _gate_synth(token)
                 if out_tok:
                     q.put(out_tok)
+                    synth_chunks.append(out_tok)
             # Flush ordonné : le reliquat du gate HTML repasse par le gate Sources.
             tail = html_gate.flush() if html_gate is not None else ""
             if src_gate is not None:
@@ -1256,6 +1261,7 @@ class Pipeline:
                 tail = (tail or "") + src_gate.flush()
             if tail:
                 q.put(tail)
+                synth_chunks.append(tail)
             await _emit_model_reasoning(final=True)
 
             # Liens de téléchargement des documents (agent writer) — émis
@@ -1302,6 +1308,18 @@ class Pipeline:
                     show_perf_stats=eff_show_perf,
                 )
                 q.put(f"\n\n---\n*{footer}*")
+
+            # Proposition d'artifact (SIGNAL FAIBLE) — chips cliquables sous la
+            # réponse, UNIQUEMENT si aucun artifact n'a été produit ce tour
+            # (sinon doublon). L'agent dev sur signal FORT est déjà géré par le
+            # superviseur (RULE 11b) → ici on ne couvre que le « peut-être utile ».
+            produced_artifact = bool(all_embeds_emitted) or any(
+                a.get("type") == "document" for a in artifacts
+            )
+            if self.valves.suggest_artifacts and not produced_artifact:
+                from tools.artifact_signals import detect_weak_signals
+                suggestions = detect_weak_signals(user_message, "".join(synth_chunks))
+                await _emit_followup_chips(event_emitter, suggestions)
 
             # Diagramme d'exécution (debug / transparence) — caché par défaut.
             if self.valves.emit_execution_graph:
@@ -1996,6 +2014,25 @@ def _extract_html_embeds(text: str) -> tuple[list[str], str]:
 
     stripped = _HTML_FENCE_RE.sub(_replace, text)
     return embeds, stripped
+
+
+async def _emit_followup_chips(event_emitter, suggestions: list[dict]) -> None:
+    """Émet des « follow-up chips » cliquables sous la réponse (event OpenWebUI
+    `chat:message:follow_ups`). Chaque chip relance, au clic, le `prompt`
+    associé comme nouveau message — qui re-route vers l'agent dev.
+
+    OpenWebUI rend `data.follow_ups` comme une liste de suggestions cliquables.
+    On envoie les PROMPTS (texte resoumis), le libellé court servant d'aide-mémoire
+    n'étant pas distinct dans l'API native — le prompt reste lisible et explicite.
+    Non-bloquant : un échec (version OWUI sans cet event) ne casse pas le tour.
+    """
+    if not event_emitter or not suggestions:
+        return
+    follow_ups = [s["prompt"] for s in suggestions]
+    try:
+        await event_emitter({"type": "chat:message:follow_ups", "data": {"follow_ups": follow_ups}})
+    except Exception:
+        pass
 
 
 async def _emit_html_embeds(event_emitter, embeds: list[str], replace: bool = False) -> None:
