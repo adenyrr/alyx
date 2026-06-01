@@ -245,6 +245,28 @@ _FORMAT_EXTENSIONS: dict[str, str] = {
 }
 
 
+# Bloc de code englobant que les LLM ajoutent parfois autour de TOUTE leur sortie
+# (```markdown … ``` ou ```md … ```). Sans le retirer, pandoc reçoit les
+# backticks littéraux et les recopie dans le .docx → markdown brut visible dans
+# Word (bug constaté). On ne retire QUE le fence qui enveloppe l'intégralité.
+_WRAPPING_FENCE_RE = re.compile(
+    r"^\s*```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL | re.IGNORECASE
+)
+
+
+def _strip_md_fence(text: str) -> str:
+    """Retire un éventuel bloc ```markdown/```md englobant TOUTE la sortie.
+
+    Ne touche PAS aux fences internes légitimes (un bloc de code dans le
+    document) : seul un fence qui ouvre au tout début et ferme à la toute fin
+    est retiré, et uniquement s'il n'y a pas d'autre ``` au milieu (sinon c'est
+    du contenu, pas un emballage)."""
+    m = _WRAPPING_FENCE_RE.match(text)
+    if m and "```" not in m.group(1):
+        return m.group(1).strip()
+    return text
+
+
 def _extract_title(markdown: str) -> str:
     """Extrait un titre depuis le markdown : 1) YAML front matter `title:`, sinon
     2) premier H1, sinon 3) "Document" par défaut. Utilisé pour les formats qui
@@ -345,6 +367,28 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
     context_parts: list[str] = []
     artifacts: list[dict] = []
 
+    # 0. Document(s) UPLOADÉ(S) — le texte à corriger/réécrire. Extrait par OWUI
+    # (Tika) et transmis via _owui.file_texts. SANS lui, le writer hallucinerait
+    # un autre document : on l'injecte en priorité, ou on signale son absence.
+    file_texts = (state.get("_owui") or {}).get("file_texts") or []
+    file_ids = (state.get("_owui") or {}).get("file_ids") or []
+    if file_texts:
+        joined = "\n\n".join(t[:8000] for t in file_texts)
+        context_parts.append(
+            "## Document fourni par l'utilisateur·rice (LE document à traiter — "
+            "base-toi EXCLUSIVEMENT dessus)\n"
+            f"<untrusted_content source=\"user_file\">\n{joined}\n</untrusted_content>"
+        )
+    elif file_ids:
+        # Un fichier est attaché mais son contenu n'a pas été extrait/transmis.
+        # Mieux vaut le dire que d'inventer un document sans rapport.
+        context_parts.append(
+            "## ⚠️ Document attaché mais ILLISIBLE\n"
+            "Un fichier est référencé mais son contenu n'a pas pu être récupéré. "
+            "N'INVENTE PAS de document : indique à l'utilisateur·rice que le "
+            "contenu n'a pas pu être lu et demande de le recoller en texte."
+        )
+
     # 1. Résultats phase 1 (workflow séquentiel) — matériel source pour la rédaction
     prior_outputs = {
         k: v for k, v in (state.get("agent_outputs") or {}).items()
@@ -390,7 +434,7 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         SystemMessage(content=system_prompt),
         HumanMessage(content=prompt),
     ])
-    markdown_output = response.content or ""
+    markdown_output = _strip_md_fence(response.content or "")
     _u = getattr(response, "usage_metadata", None) or {}
     prompt_tokens = _u.get("input_tokens", 0) or 0
     completion_tokens = _u.get("output_tokens", 0) or 0

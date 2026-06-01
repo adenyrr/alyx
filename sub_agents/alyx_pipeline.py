@@ -360,28 +360,41 @@ def _extract_owui_context(body: dict) -> dict[str, Any]:
 
     knowledge_ids: list[str] = []
     file_ids: list[str] = []
+    file_texts: list[str] = []  # contenu extrait (Tika) si OWUI le fournit
     for item in raw:
         if not isinstance(item, dict):
             continue
         t = str(item.get("type") or "").lower()
+        inner = item.get("collection") or item.get("file")
         ident = item.get("id") or item.get("collection_id") or item.get("file_id")
-        if not ident:
-            inner = item.get("collection") or item.get("file")
-            if isinstance(inner, dict):
-                ident = inner.get("id")
-        if not ident:
-            continue
-        ident = str(ident)
+        if not ident and isinstance(inner, dict):
+            ident = inner.get("id")
         if t in ("collection", "knowledge"):
-            knowledge_ids.append(ident)
+            if ident:
+                knowledge_ids.append(str(ident))
         elif t == "file":
-            file_ids.append(ident)
+            if ident:
+                file_ids.append(str(ident))
+            # OpenWebUI injecte souvent le texte extrait (Tika) dans
+            # file.data.content (ou item.content). On le capte pour que l'agent
+            # writer voie le VRAI document à corriger plutôt que d'halluciner.
+            name = ""
+            content = item.get("content") or ""
+            if isinstance(inner, dict):
+                name = str(inner.get("filename") or inner.get("name") or "")
+                data = inner.get("data")
+                if isinstance(data, dict) and not content:
+                    content = data.get("content") or ""
+            if isinstance(content, str) and content.strip():
+                header = f"### Fichier : {name}\n" if name else ""
+                file_texts.append(f"{header}{content.strip()}")
 
     return {
         "user_id": user_id,
         "chat_id": chat_id,
         "knowledge_ids": knowledge_ids,
         "file_ids": file_ids,
+        "file_texts": file_texts,
     }
 
 
@@ -947,11 +960,17 @@ class Pipeline:
             embedding: list | None = None
             owui_ctx = initial_state.get("_owui") or {}
             cache_user_id = str(owui_ctx.get("user_id") or "").strip()
+            # Un tour avec FICHIER uploadé n'est PAS cacheable : le contenu du
+            # fichier n'entre pas dans la clé (seul user_message le fait), donc
+            # une instruction générique (« corrige ce document ») collisionnerait
+            # avec le document d'un·e autre. cache_key()=None sans user_id fiable.
+            has_uploaded_file = bool(owui_ctx.get("file_ids") or owui_ctx.get("knowledge_ids"))
             from tools import cache as _agent_cache
-            if self.valves.enable_agent_cache or self.valves.enable_semantic_cache:
+            if (self.valves.enable_agent_cache or self.valves.enable_semantic_cache) and not has_uploaded_file:
+                # cache_key()=None si pas de user_id fiable → on ne cache pas.
                 cache_key = _agent_cache.cache_key(user_message, user_id=cache_user_id)
                 # 1. Exact match (Redis) — moins cher, à essayer en premier
-                if self.valves.enable_agent_cache:
+                if self.valves.enable_agent_cache and cache_key:
                     cached = await _agent_cache.get(self.valves.redis_url, cache_key)
                     if cached:
                         await _emit("⚡ Réponse depuis le cache (exact)")

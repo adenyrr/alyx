@@ -25,22 +25,30 @@ import re
 _TIME_SENSITIVE = {"web", "geo", "data", "image_gen", "media", "rag", "memory"}
 
 _KEY_PREFIX = "alyx:agentcache:"
-_ANONYMOUS_USER = "_anon"  # Cache utilisable même sans user_id (mode dev/test)
+# NB : plus de fallback `_anon` partagé — sans user_id fiable on ne cache pas
+# (ni exact, ni sémantique), pour ne jamais agréger plusieurs comptes dans un
+# bucket commun (fuite cross-user constatée : instruction générique « corrige ce
+# document » resservant la réponse d'un·e autre utilisateur·rice).
 
 
-def cache_key(user_text: str, user_id: str | None = None) -> str:
-    """Clé déterministe scopée par utilisateur·rice.
+def cache_key(user_text: str, user_id: str | None = None) -> str | None:
+    """Clé déterministe scopée par utilisateur·rice, ou None si non cacheable.
 
     Format : `alyx:agentcache:{user_id}:{sha256(texte)}`. Le user_id en préfixe
     garantit l'isolation : deux utilisateur·rices posant la même question ont des
     clés différentes, pas de fuite de cache entre comptes.
 
-    Si user_id est absent (auth désactivée, mode dev), tombe sur `_anon` — toujours
-    isolé du cache des utilisateur·rices authentifié·es.
+    Retourne None si user_id est ABSENT : sans identité fiable (fréquent en mode
+    Pipelines externe), un bucket `_anon` PARTAGÉ agrégerait plusieurs comptes —
+    une instruction générique (« corrige ce document ») y collisionnerait entre
+    utilisateur·rices. On préfère ne pas cacher plutôt que fuiter (cf. la même
+    règle dans memory_agent : pas de user_id → pas de mémoire).
     """
+    uid = (user_id or "").strip()
+    if not uid:
+        return None
     norm = re.sub(r"\s+", " ", (user_text or "").strip().lower())[:1000]
     digest = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
-    uid = (user_id or _ANONYMOUS_USER).strip() or _ANONYMOUS_USER
     return f"{_KEY_PREFIX}{uid}:{digest}"
 
 
@@ -121,9 +129,9 @@ async def semantic_get(qdrant_url: str, qdrant_api_key: str, collection: str,
 
     Échec silencieux : indisponibilité Qdrant ⇒ None (pas d'erreur bloquante).
     """
-    if not embedding:
-        return None
-    uid = (user_id or _ANONYMOUS_USER).strip() or _ANONYMOUS_USER
+    uid = (user_id or "").strip()
+    if not embedding or not uid:
+        return None  # pas d'identité fiable → pas de lecture cache (cf. cache_key)
     try:
         import httpx
         headers = {"api-key": qdrant_api_key} if qdrant_api_key else {}
@@ -163,9 +171,9 @@ async def semantic_store(qdrant_url: str, qdrant_api_key: str, collection: str,
 
     Crée la collection idempotemment.
     """
-    if not embedding or not agent_outputs:
-        return
-    uid = (user_id or _ANONYMOUS_USER).strip() or _ANONYMOUS_USER
+    uid = (user_id or "").strip()
+    if not embedding or not agent_outputs or not uid:
+        return  # pas d'identité fiable → pas d'écriture cache (cf. cache_key)
     try:
         import httpx
         headers = {"api-key": qdrant_api_key} if qdrant_api_key else {}
