@@ -37,6 +37,14 @@ services:
       RAG_SYSTEM_CONTEXT: "true"
       CHUNK_MIN_SIZE_TARGET: "1000"
       TIKA_SERVER_URL: "http://tika:9998"
+      # Sécurité retrieval (durcissement v0.9.6) : refuse par défaut toute
+      # recherche sur une collection non-scopée (sans base de connaissances
+      # explicitement autorisée). Aligne l'API OWUI avec le fail-closed déjà
+      # appliqué côté agent rag (rag_agent.py) et rag_client (allow_unscoped=False).
+      ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS: "false"
+      # Filesystem tool pour les bases de connaissances (v0.9.6) : autorise les
+      # modèles à explorer une KB via ls/cat/grep/find/head/tail/sed.
+      ENABLE_KB_EXEC: "true"
       # Embedding — passe par LiteLLM pour utiliser le MÊME modèle que le
       # pipeline Alyx (rag_client). Indexation et requête doivent être alignées,
       # sinon les dimensions de vecteurs Qdrant ne correspondent pas.
@@ -55,6 +63,10 @@ services:
       # MCPO
       ENABLE_MCP_SERVERS: "true"
       MCP_SERVER_BASE_URL: "http://mcpo:8000"
+      # Timeout du handshake d'initialisation MCP (v0.9.6, en secondes). Généreux
+      # car mcpo démarre plusieurs serveurs en cascade (playwright lent en dernier,
+      # cf. config mcpo) ; évite qu'un serveur lent fasse échouer l'init globale.
+      MCP_INITIALIZE_TIMEOUT: "${MCP_INITIALIZE_TIMEOUT:-30}"
       # CSP des artifacts — injectée en <meta http-equiv> dans tout srcdoc iframe
       # (Artifacts, previews HTML/code, modales de citation). Sans elle (défaut
       # vide) un artifact généré par le LLM peut fetch n'importe où. La whitelist
@@ -90,6 +102,17 @@ services:
       OAUTH_SCOPES: ${OAUTH_SCOPES}
       OPENID_REDIRECT_URI: ${OPENID_REDIRECT_URI}
       ENABLE_LOGIN_FORM: ${ENABLE_LOGIN_FORM}
+      # Mapping de rôles OAuth (v0.9.6). Mettre OAUTH_ALLOWED_ROLES="*" dans .env
+      # pour accorder le rôle « user » à TOUTE personne authentifiée via le SSO
+      # (pratique en contexte université/entreprise mono-IdP). Laisser vide =
+      # comportement actuel. Nécessite ENABLE_OAUTH_ROLE_MANAGEMENT=true + le claim
+      # de rôles de ton IdP. NB : les placeholders {{USER_EMAIL}} / {{USER_ROLE}}
+      # sont désormais disponibles dans les en-têtes personnalisés des connexions
+      # (OpenAI/MCP) — à configurer par connexion dans Admin Settings, pas ici.
+      ENABLE_OAUTH_ROLE_MANAGEMENT: ${ENABLE_OAUTH_ROLE_MANAGEMENT:-false}
+      OAUTH_ROLES_CLAIM: ${OAUTH_ROLES_CLAIM:-roles}
+      OAUTH_ALLOWED_ROLES: ${OAUTH_ALLOWED_ROLES:-}
+      OAUTH_ADMIN_ROLES: ${OAUTH_ADMIN_ROLES:-admin}
     security_opt:
       - no-new-privileges:true
     depends_on:
@@ -393,6 +416,43 @@ services:
     networks:
       - llm-network
 
+  # ──────────────────────────────────────────────
+  # OIKB — synchronisation des bases de connaissances (OPT-IN, v0.9.6)
+  # ──────────────────────────────────────────────
+  # Service OPTIONNEL (profile "oikb") : alimente une KB OpenWebUI depuis une
+  # source (répertoire local monté, repo GitHub, S3…) avec diff SHA-256 incrémental
+  # → seuls les fichiers nouveaux/modifiés sont (ré)uploadés. La KB synchronisée
+  # est ensuite interrogeable par l'agent `rag` (collection open-webui_knowledge).
+  #
+  # Pré-requis :
+  #   1. Créer une KB dans OpenWebUI, noter son ID (UUID).
+  #   2. Générer une clé API (Settings → Account → API Keys, format sk-...).
+  #   3. Renseigner OIKB_* dans .env, déposer les fichiers dans OIKB_SOURCE_DIR.
+  # Démarrer le daemon (syncs planifiés via oikb/.oikb.yaml) :
+  #   docker compose --profile oikb up -d oikb
+  # OU sync ponctuel sans daemon (commande vérifiée) :
+  #   docker compose --profile oikb run --rm oikb oikb sync /docs --kb-id "$OIKB_KB_ID"
+  oikb:
+    image: ghcr.io/open-webui/oikb:latest
+    container_name: oikb
+    profiles: ["oikb"]
+    environment:
+      OPEN_WEBUI_URL: "http://open-webui:8080"
+      OPEN_WEBUI_API_KEY: "${OIKB_API_KEY:-}"
+      KB_ID: "${OIKB_KB_ID:-}"
+    volumes:
+      - ${OIKB_SOURCE_DIR:-./oikb/docs}:/docs:ro
+      - ./oikb/.oikb.yaml:/app/.oikb.yaml:ro
+      - oikb_state:/app/.oikb
+    # Daemon = sync continu selon oikb/.oikb.yaml. Surcharger pour un mode ponctuel.
+    command: ${OIKB_CMD:-oikb daemon}
+    depends_on:
+      open-webui:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - llm-network
+
 # ──────────────────────────────────────────────
 # VOLUMES
 # ──────────────────────────────────────────────
@@ -419,6 +479,8 @@ volumes:
   mcp_papers:
     driver: local
   open_terminal_data:
+    driver: local
+  oikb_state:
     driver: local
 
 # ──────────────────────────────────────────────

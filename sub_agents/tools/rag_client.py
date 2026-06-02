@@ -43,6 +43,7 @@ async def search(
     collection: str,
     top_k: int = 5,
     tenant_ids: list[str] | None = None,
+    allow_unscoped: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Recherche des passages similaires dans Qdrant.
@@ -53,17 +54,31 @@ async def search(
     explicitement autorisé pour la conversation courante — c'est ce qui évite
     les fuites de documents entre utilisateurs.
 
+    FAIL-CLOSED (aligné sur OWUI v0.9.6, `ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS`
+    désormais false par défaut) : sans `tenant_ids`, la recherche est REFUSÉE
+    plutôt que de balayer toute la collection partagée (fuite cross-user). Un
+    contexte admin explicite peut lever la garde via `allow_unscoped=True`.
+
     Args:
         query_text: question ou phrase de recherche
         collection: nom de la collection Qdrant (ex: "open-webui_knowledge")
         top_k: nombre de résultats à retourner
-        tenant_ids: si fourni, ne renvoie que les points dont `tenant_id` est
-            dans la liste. Si None ou vide, AUCUN filtre n'est appliqué — à
-            réserver aux contextes administrateur (jamais en exposition utilisateur).
+        tenant_ids: ne renvoie que les points dont `tenant_id` est dans la liste.
+        allow_unscoped: si True, autorise une recherche SANS filtre tenant
+            (toute la collection). Réservé à l'admin ; jamais en exposition user.
 
     Returns:
         Liste de dicts avec 'id', 'score', 'payload' (contient le texte du chunk).
+
+    Raises:
+        PermissionError: si `tenant_ids` est vide et `allow_unscoped` est False.
     """
+    if not tenant_ids and not allow_unscoped:
+        raise PermissionError(
+            "Recherche RAG non-scopée refusée : aucune base de connaissances "
+            "autorisée (tenant_ids vide). Passe allow_unscoped=True uniquement "
+            "en contexte administrateur."
+        )
     vector = await _embed(query_text)
     headers: dict[str, str] = {}
     if _QDRANT_API_KEY:

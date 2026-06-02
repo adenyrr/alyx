@@ -1,0 +1,25 @@
+# Configuration du daemon oikb (synchronisation des bases de connaissances).
+#
+# ⚠️ SCHÉMA À VALIDER : ce gabarit reflète la doc oikb au mieux, mais le format
+# exact des clés peut évoluer. Référence : https://github.com/open-webui/oikb
+# En cas de doute, préfère le mode ponctuel (commande vérifiée) :
+#   docker compose --profile oikb run --rm oikb oikb sync /docs --kb-id "$OIKB_KB_ID"
+#
+# Auth + URL viennent des variables d'environnement (cf. compose.yaml service oikb) :
+#   OPEN_WEBUI_URL, OPEN_WEBUI_API_KEY, KB_ID
+
+sources:
+  # Répertoire local monté dans le conteneur (cf. OIKB_SOURCE_DIR → /docs).
+  - path: /docs
+    kb_id: ${KB_ID}
+    schedule: "30m"          # intervalle simple ("1h", "30m") OU cron ("0 6 * * 1-5")
+
+  # Exemple source GitHub (décommenter et adapter) :
+  # - github: owner/repo
+  #   kb_id: <uuid-d-une-autre-kb>
+  #   schedule: "0 6 * * 1-5"
+
+  # Exemple source S3 (nécessite l'image oikb[s3] / extra) :
+  # - s3: s3://mon-bucket/prefix
+  #   kb_id: <uuid-d-une-autre-kb>
+  #   schedule: "1h"

@@ -1,0 +1,2 @@
+# Dépose ici les fichiers à synchroniser vers la base de connaissances OpenWebUI
+# (mode source locale d'oikb). Surcharge le chemin via OIKB_SOURCE_DIR dans .env.
