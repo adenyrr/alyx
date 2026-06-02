@@ -1974,6 +1974,20 @@ async def _emit_writer_attachments(event_emitter, valves, artifacts: list[dict])
 
 
 _HTML_FENCE_RE = re.compile(r"```html[^\n]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+# Bloc ```html OUVERT mais jamais fermé : l'agent dev a été coupé avant la fin
+# (limite de tokens / contexte). Sans fence de fermeture, `_HTML_FENCE_RE` ne
+# matche pas → l'artifact serait perdu et la synthèse proposerait à tort une
+# carte « à générer ». On récupère le reste du texte comme artifact (partiel).
+_HTML_FENCE_OPEN_RE = re.compile(r"```html[^\n]*\n(.*)\Z", re.DOTALL | re.IGNORECASE)
+# Document HTML « nu », sans fence Markdown : certains modèles (Mistral, etc.)
+# émettent `<!doctype html>` / `<html>` directement. On le récupère, complet
+# (`</html>`) ou tronqué (jusqu'à la fin), sous garde anti-faux-positif.
+_BARE_HTML_RE = re.compile(
+    r"(<!doctype\s+html\b.*?</html\s*>|<html[\s>].*?</html\s*>)", re.DOTALL | re.IGNORECASE
+)
+_BARE_HTML_OPEN_RE = re.compile(
+    r"(<!doctype\s+html\b.*\Z|<html[\s>].*\Z)", re.DOTALL | re.IGNORECASE
+)
 
 # Petit script injecté dans chaque embed extrait : poste la hauteur effective au
 # parent Open WebUI (cf. doc rich-ui, message `iframe:height`). Sans cela, l'iframe
@@ -2014,16 +2028,17 @@ def _extract_html_embeds(text: str) -> tuple[list[str], str]:
     qui indique à la synthèse d'expliquer l'artifact SANS reproduire le code
     (sinon il s'afficherait deux fois : inline + panneau Artifacts).
 
+    Tolérant aux sorties imparfaites : un bloc ```html non fermé (agent tronqué)
+    OU un document HTML « nu » sans fence (certains modèles l'émettent direct)
+    sont aussi récupérés — sinon l'artifact serait silencieusement perdu et la
+    synthèse proposerait à tort de « générer une carte » déjà produite.
+
     Returns:
         (liste des contenus HTML extraits, texte nettoyé pour la synthèse)
     """
     embeds: list[str] = []
 
-    def _replace(match: "re.Match") -> str:
-        html = match.group(1).strip()
-        if not html:
-            return match.group(0)
-        embeds.append(_inject_height_reporter(html))
+    def _placeholder(html: str) -> str:
         title_m = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
         label = title_m.group(1).strip() if title_m else "interactif"
         return (
@@ -2031,7 +2046,38 @@ def _extract_html_embeds(text: str) -> tuple[list[str], str]:
             "NE PAS reproduire le code : présente-le et commente-le en 2-3 phrases.]"
         )
 
+    def _replace(match: "re.Match") -> str:
+        html = match.group(1).strip()
+        if not html:
+            return match.group(0)
+        embeds.append(_inject_height_reporter(html))
+        return _placeholder(html)
+
+    # 1) Cas nominal : blocs ```html … ``` complets (fence de fermeture présente).
     stripped = _HTML_FENCE_RE.sub(_replace, text)
+
+    # 2) Bloc ```html ouvert mais non fermé (réponse tronquée) → récupérer le
+    #    reste. Tourne MÊME si des blocs complets ont déjà été extraits : en
+    #    multi-artifacts, seul le DERNIER bloc peut être coupé (les complets sont
+    #    déjà remplacés par un placeholder, donc plus aucun ```html résiduel).
+    m = _HTML_FENCE_OPEN_RE.search(stripped)
+    if m and m.group(1).strip():
+        html = m.group(1).strip()
+        embeds.append(_inject_height_reporter(html))
+        stripped = stripped[: m.start()] + _placeholder(html)
+
+    # 3) Aucun fence : document HTML nu émis directement par le modèle. Garde
+    #    anti-faux-positif (taille + balise structurante) pour ne pas confondre
+    #    une simple mention « la balise <html> » en prose avec un vrai artifact.
+    if not embeds:
+        m = _BARE_HTML_RE.search(stripped) or _BARE_HTML_OPEN_RE.search(stripped)
+        if m:
+            html = m.group(1).strip()
+            low = html.lower()
+            if len(html) > 200 and any(t in low for t in ("<body", "<script", "<div", "<head")):
+                embeds.append(_inject_height_reporter(html))
+                stripped = stripped[: m.start()] + _placeholder(html) + stripped[m.end():]
+
     return embeds, stripped
 
 

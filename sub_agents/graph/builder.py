@@ -78,7 +78,7 @@ _AGENT_TIMEOUTS: dict[str, int] = {
     "image_gen": 130,  # Pollinations.ai (timeout interne 120 s)
     "writer":       90,   # rédaction longue + conversion pandoc éventuelle
     "presenter":    75,   # génération deck reveal.js + Context7
-    "dev":          60,   # Context7 + terminal
+    "dev":          90,   # Context7 + terminal ; ou 2 passes concurrentes (multi-artifacts)
     "web":          50,   # DuckDuckGo + fetch multiple URLs
     "wikipedia":    50,
     "fact_checker": 60,   # extraction claims + N recherches web + N verify LLM

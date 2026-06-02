@@ -14,6 +14,8 @@ Outils (dans l'ordre d'utilisation) :
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 from typing import TYPE_CHECKING, Callable
@@ -193,6 +195,153 @@ def _wants_map(user_text: str, prior_outputs: dict) -> bool:
     return False
 
 
+# Intention « tableau / comparatif / listing » : justifie un artifact tableau,
+# en complément d'une carte (ex. lieux + restos). Conservateur — exige des
+# données de phase 1 pour ne pas fabriquer un tableau sans contenu.
+_TABLE_INTENT_RE = re.compile(
+    r"\b(tableau|comparat(?:if|ive)|comparaison|comparer|versus|vs|diff[ée]rences?|"
+    r"liste|classement|top\s*\d+|palmar[èe]s|restos?|restaurants?|adresses?|"
+    r"incontournables?|s[ée]lection|menus?)\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_table(user_text: str, prior_outputs: dict) -> bool:
+    """Vrai si un tableau récapitulatif/comparatif apporte de la valeur ce tour."""
+    return bool(prior_outputs) and bool(_TABLE_INTENT_RE.search(user_text))
+
+
+# Specs des artifacts auto-produits en PASSES SÉPARÉES (1 appel LLM chacun →
+# budget de tokens complet par artifact, pas de troncature croisée). L'ordre de
+# la liste = l'ordre d'affichage. `skill` = skill local chargé pour cette passe.
+_DELIVERABLE_SPECS: dict[str, dict[str, str]] = {
+    "table": {
+        "skill": "tabulator",
+        "status": "📊 Génération du tableau…",
+        "focus": (
+            "Produce EXACTLY ONE self-contained ```html artifact: an interactive, "
+            "sortable/filterable TABLE summarizing the items from the data above "
+            "(places, restaurants, options…), with clear columns (e.g. name, "
+            "type/category, highlight, address/zone). Do NOT include a map in this "
+            "artifact. End with 1-2 sentences of plain-English explanation."
+        ),
+    },
+    "map": {
+        "skill": "leaflet-maps",
+        "status": "🗺️ Génération de la carte…",
+        "focus": (
+            "Produce EXACTLY ONE self-contained ```html artifact: an interactive "
+            "Leaflet MAP with one marker per location from the data above. For each "
+            "marker, use the EXACT lat/lon from the '## Verified coordinates' block "
+            "when present; only for a place absent from that block, fall back to its "
+            "best-known approximate coordinates. Each marker carries a popup (name + "
+            "short note). Do NOT include a data table in this artifact. End with 1-2 "
+            "sentences of explanation."
+        ),
+    },
+}
+
+
+def _plan_deliverables(user_text: str, prior_outputs: dict) -> list[str]:
+    """Liste ORDONNÉE des artifacts à produire en passes séparées.
+
+    Retourne [] (→ passe unique nominale) sauf si AU MOINS DEUX signaux forts
+    distincts coexistent (ex. lieux à voir + restos/comparatif → tableau PUIS
+    carte). Conservateur : un seul signal = un seul artifact via le chemin
+    nominal existant.
+    """
+    deliverables: list[str] = []
+    if _wants_table(user_text, prior_outputs):
+        deliverables.append("table")
+    if _wants_map(user_text, prior_outputs):
+        deliverables.append("map")
+    return deliverables if len(deliverables) >= 2 else []
+
+
+_GEOCODE_EXTRACT_SYSTEM = """\
+From the data below, list the specific MAPPABLE places (landmarks, monuments, museums,
+restaurants, sites, addresses) that belong on a map. Output ONE place per line as
+"Place name, City, Country" so each can be geocoded unambiguously. Max 15 lines.
+No numbering, no commentary. If there is nothing mappable, output nothing.
+"""
+
+
+def _parse_latlon(osm_result) -> "tuple[float | None, float | None]":
+    """Extrait (lat, lon) d'une réponse OSM `geocode`, en gérant l'enveloppe MCPO
+    (`{content: [{text: "<json>"}]}`), la liste de résultats et le dict direct."""
+    try:
+        if isinstance(osm_result, dict):
+            content = osm_result.get("content")
+            if isinstance(content, list) and content:
+                try:
+                    return _parse_latlon(json.loads(content[0].get("text", "")))
+                except Exception:
+                    pass
+            lat = float(osm_result.get("lat", osm_result.get("latitude", 0)) or 0) or None
+            lon = float(osm_result.get("lon", osm_result.get("longitude", 0)) or 0) or None
+            return lat, lon
+        if isinstance(osm_result, list) and osm_result and isinstance(osm_result[0], dict):
+            first = osm_result[0]
+            lat = float(first.get("lat", first.get("latitude", 0)) or 0) or None
+            lon = float(first.get("lon", first.get("longitude", 0)) or 0) or None
+            return lat, lon
+    except Exception:
+        pass
+    return None, None
+
+
+async def _geocode_for_map(prior_outputs: dict, user_text: str, model: str | None) -> str:
+    """Géocode (OSM) les lieux issus de la phase 1 → bloc de coordonnées EXACTES à
+    injecter dans la passe carte.
+
+    Corrige le cas où aucun agent `geo` n'a tourné (geo s'exécute en phase 1, avant
+    que les POI ne soient découverts par web/wikipedia, et ne géocode qu'UN lieu) :
+    sans ça, le modèle « devine » les coordonnées. On utilise le même outil OSM que
+    l'agent geo. Best-effort : '' si rien d'exploitable (n'empêche jamais la carte).
+    """
+    if not prior_outputs:
+        return ""
+    data = "\n\n".join(str(v)[:3000] for v in prior_outputs.values()).strip()
+    if not data:
+        return ""
+    llm = ChatOpenAI(
+        model=model or _MODEL, base_url=_LITELLM_URL, api_key=_LITELLM_API_KEY,
+        temperature=0, max_tokens=400,
+    )
+    try:
+        resp = await llm.ainvoke([
+            SystemMessage(content=_GEOCODE_EXTRACT_SYSTEM),
+            HumanMessage(content=f"Map context / region: {user_text}\n\nData:\n{data}"),
+        ])
+    except Exception:
+        return ""
+    raw = re.sub(r"<think(?:ing)?[^>]*>.*?</think(?:ing)?>", "", resp.content,
+                 flags=re.DOTALL | re.IGNORECASE)
+    names = [ln.strip("-•*  \t").strip() for ln in raw.splitlines() if ln.strip()][:15]
+    if not names:
+        return ""
+
+    async def _geo_one(name: str) -> str | None:
+        try:
+            r = await call_tool("osm-mcp-server", "geocode", {"q": name, "limit": 1})
+            lat, lon = _parse_latlon(r)
+            if lat is not None and lon is not None:
+                return f"- {name} → {lat:.5f}, {lon:.5f}"
+        except Exception:
+            return None
+        return None
+
+    rows = [r for r in await asyncio.gather(*(_geo_one(n) for n in names)) if r]
+    if not rows:
+        return ""
+    return (
+        "## Verified coordinates (OSM geocoding) — USE THESE EXACT lat/lon for the markers\n"
+        + "\n".join(rows)
+        + "\nDo NOT invent coordinates. If a place you want to show is missing here, "
+        "omit its marker or place it approximately and note the approximation."
+    )
+
+
 def _last_user_message(messages: list) -> str:
     for msg in reversed(messages):
         if msg.type == "human":
@@ -223,6 +372,86 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         k: v for k, v in (state.get("agent_outputs") or {}).items()
         if v and not str(v).startswith("⚠️")
     }
+
+    # ── Auto multi-artifacts (passes séparées) ───────────────────────────────
+    # Si DEUX signaux forts distincts coexistent (ex. lieux à voir + restos /
+    # comparatif), on produit chaque artifact dans sa PROPRE passe LLM. Chacun
+    # dispose du budget de tokens complet (pas de troncature croisée) et ils
+    # s'affichent à la suite, dans l'ordre planifié (tableau puis carte). Le
+    # pipeline extrait les N blocs ```html de la sortie concaténée.
+    deliverables = _plan_deliverables(user_text, prior_outputs)
+    if deliverables:
+        prior_block = ""
+        if prior_outputs:
+            prior_block = (
+                "## Data retrieved by previous agents (USE THIS as your primary data source)\n"
+                + "\n\n".join(
+                    f"### {name} agent results\n{content[:3000]}"
+                    for name, content in prior_outputs.items()
+                )
+            )
+        design_block = ""
+        design_skill = get_skill("design-system")
+        if design_skill:
+            design_block = (
+                "## Design system (OBLIGATOIRE — appliquer tokens + shell exactement)\n"
+                + design_skill
+            )
+        base_context = "\n\n".join(p for p in (prior_block, design_block) if p)
+
+        llm = ChatOpenAI(
+            model=model or _MODEL,
+            base_url=_LITELLM_URL,
+            api_key=_LITELLM_API_KEY,
+            temperature=0.15,
+        )
+        await _emit(
+            f"🧩 {len(deliverables)} artifacts à produire : "
+            + ", ".join(_DELIVERABLE_SPECS[k]["status"].rstrip("… ") for k in deliverables)
+        )
+
+        async def _one_pass(kind: str) -> "tuple[str, int, int]":
+            """Génère UN artifact (1 appel LLM). Renvoie (contenu, prompt_tk, completion_tk)."""
+            spec = _DELIVERABLE_SPECS[kind]
+            skill_content = get_skill(spec["skill"]) or ""
+            parts = [base_context]
+            # Carte : géocoder les lieux (OSM) → coordonnées exactes, pas devinées.
+            if kind == "map":
+                await _emit("🌍 Géocodage des lieux (OSM)…")
+                coords = await _geocode_for_map(prior_outputs, user_text, model)
+                if coords:
+                    parts.append(coords)
+            if skill_content:
+                parts.append(
+                    "## Relevant skill file (USE AS TEMPLATE — adapt all content to user's request)\n"
+                    f"### Skill: {spec['skill']}\n{skill_content[:6000]}"
+                )
+            parts.append(f"## Your task for THIS artifact\n{spec['focus']}")
+            context = "\n\n".join(p for p in parts if p)
+            resp = await llm.ainvoke([
+                SystemMessage(content=_SYSTEM),
+                HumanMessage(content=f"{context}\n\nUser request: {user_text}"),
+            ])
+            _u = getattr(resp, "usage_metadata", None) or {}
+            return resp.content, (_u.get("input_tokens", 0) or 0), (_u.get("output_tokens", 0) or 0)
+
+        # Passes INDÉPENDANTES → concurrentes (wall-clock ≈ une seule passe, pas la
+        # somme : sinon deux gros artifacts dépasseraient le timeout 60s du nœud dev).
+        # gather préserve l'ordre → tableau puis carte, conformément au plan.
+        results = await asyncio.gather(*(_one_pass(k) for k in deliverables))
+        chunks = [r[0] for r in results]
+        prompt_tokens = sum(r[1] for r in results)
+        completion_tokens = sum(r[2] for r in results)
+
+        return {
+            "agent_outputs": {"dev": "\n\n".join(chunks)},
+            "agent_metrics": {"dev": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "model": model or _MODEL,
+            }},
+        }
+
     if prior_outputs:
         prior_text = "\n\n".join(
             f"### {name} agent results\n{content[:3000]}"
@@ -256,6 +485,15 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
             skill_hits = [(99, "leaflet-maps", leaflet), *skill_hits]
             skill_names_loaded.add("leaflet-maps")
 
+    # 1c-bis. Auto-tableau : symétrique de l'auto-carte. Une intention comparatif /
+    # listing (« compare », « top 10 », « restos »…) avec des données de phase 1 ne
+    # ferait pas surfacer le skill tabulator par le matcher anglais → on le force.
+    if "tabulator" not in skill_names_loaded and _wants_table(user_text, prior_outputs):
+        tabulator = get_skill("tabulator")
+        if tabulator:
+            skill_hits = [(98, "tabulator", tabulator), *skill_hits]
+            skill_names_loaded.add("tabulator")
+
     if skill_hits:
         skill_names = ", ".join(n for _, n, _ in skill_hits)
         await _emit(f"📚 Skills : {skill_names}")
@@ -263,6 +501,14 @@ async def run(state: "AlyxState", config: RunnableConfig | None = None, model: s
         context_parts.append(
             f"## Relevant skill files (USE AS TEMPLATE — adapt all content to user's request)\n{skill_block}"
         )
+
+    # 1d. Carte mono-artifact : géocoder les lieux (OSM) pour des coordonnées
+    # exactes (cf. _geocode_for_map). Même correctif géo que la passe multi-artifacts.
+    if _wants_map(user_text, prior_outputs):
+        await _emit("🌍 Géocodage des lieux (OSM)…")
+        coords_block = await _geocode_for_map(prior_outputs, user_text, model)
+        if coords_block:
+            context_parts.append(coords_block)
 
     # 2. Docs Context7 si une bibliothèque est détectée
     detected_lib = _detect_library(user_text)
